@@ -9,9 +9,38 @@ A Python bot that connects to MeshCore mesh networks via serial port, BLE, or TC
 - **Command System**: Plugin-based command architecture with built-in commands
 - **Rate Limiting**: Global, per-user (by pubkey or name), and bot transmission rate limits to prevent spam
 - **User Management**: Ban/unban users with persistent storage
-- **Scheduled Messages**: Send messages at configured times
+- **Scheduled Messages**: Send messages at fixed daily times or on a repeating interval, with optional send-count limits ([docs](docs/scheduled-messages.md))
+- **Web Viewer**: Browser-based dashboard, send messages, manage scheduled messages, and view real-time data — password protected with bcrypt ([docs](docs/web-viewer.md))
 - **Direct Message Support**: Respond to private messages
 - **Logging**: Console and file logging with configurable levels
+
+### Web Viewer
+
+A browser-based interface that runs alongside the bot:
+
+- **Dashboard** — live bot health, database stats, top users/channels, real-time packet feed
+- **Send Message** — send to one or more channels (including private/encrypted channels) directly from the browser
+- **Scheduled Messages** — create and manage fixed-time or interval messages with optional send-count limits
+- **Radio / Channel Management** — view and manage hashtag and private channels
+- **Config Panel** — structured view of all bot settings
+- **Authentication** — bcrypt-hashed password with brute-force rate limiting; supports a secondary temp password for sharing access
+- **Cloudflare Tunnel ready** — respects `CF-Connecting-IP` for real client IP behind a tunnel
+
+```ini
+[Web_Viewer]
+enabled = true
+auto_start = true
+host = 127.0.0.1
+port = 5000
+web_viewer_password = $2b$12$...   # generate with hash_password.py
+```
+
+Generate a bcrypt hash for your password:
+```bash
+python3 hash_password.py
+```
+
+See [Web Viewer docs](docs/web-viewer.md) and [Scheduled Messages docs](docs/scheduled-messages.md) for full documentation.
 
 ### Service Plugins
 
