@@ -25,6 +25,7 @@
               <th style="border-color:var(--border-color);">Time / Interval</th>
               <th style="border-color:var(--border-color);">Channel</th>
               <th style="border-color:var(--border-color);">Message</th>
+              <th style="border-color:var(--border-color); width:80px;">Sends</th>
               <th style="border-color:var(--border-color); width:110px;"></th>
             </tr>
           </thead>
@@ -119,6 +120,22 @@
                     placeholder="Message text…"></textarea>
           <div class="form-text"><span id="modal-char-count">0</span> / 200 characters</div>
         </div>
+
+        <div class="mb-3">
+          <label class="form-label">Send limit</label>
+          <div class="d-flex align-items-center gap-3">
+            <div class="form-check form-switch mb-0">
+              <input class="form-check-input" type="checkbox" id="modal-count-enabled">
+              <label class="form-check-label" for="modal-count-enabled">Limit sends</label>
+            </div>
+            <div id="modal-count-group" style="display:none;">
+              <input type="number" class="form-control form-control-sm" id="modal-count" min="1" max="9999"
+                     style="width:90px;background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);"
+                     value="1">
+            </div>
+          </div>
+          <div class="form-text">When enabled, the entry is removed from config after the last send.</div>
+        </div>
       </div>
       <div class="modal-footer" style="border-color:var(--border-color);">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -187,14 +204,14 @@
       renderTable();
     } catch(e) {
       document.getElementById('msg-body').innerHTML =
-        `<tr><td colspan="4" class="text-center text-danger py-4">Failed to load: ${escHtml(e.message)}</td></tr>`;
+        `<tr><td colspan="5" class="text-center text-danger py-4">Failed to load: ${escHtml(e.message)}</td></tr>`;
     }
   }
 
   function renderTable() {
     const tbody = document.getElementById('msg-body');
     if (!messages.length) {
-      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No scheduled messages configured. Click <strong>Add Message</strong> to create one.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No scheduled messages configured. Click <strong>Add Message</strong> to create one.</td></tr>';
       return;
     }
     tbody.innerHTML = messages.map(m => `
@@ -207,6 +224,9 @@
         </td>
         <td style="border-color:var(--border-color);">${m.channels.map(c => `<code>${escHtml(c)}</code>`).join(' ')}</td>
         <td style="border-color:var(--border-color);">${escHtml(m.message)}</td>
+        <td style="border-color:var(--border-color);" class="text-center">
+          ${m.count != null ? `<span class="badge bg-warning text-dark">${m.count}</span>` : '<span class="text-muted">∞</span>'}
+        </td>
         <td style="border-color:var(--border-color);">
           <button class="btn btn-outline-secondary btn-sm me-1" onclick="openEdit(${escHtml(JSON.stringify(m.key))})">
             <i class="fas fa-edit"></i>
@@ -247,12 +267,20 @@
     Array.from(document.getElementById('modal-channel').options).forEach(o => o.selected = false);
     document.getElementById('modal-message').value = '';
     document.getElementById('modal-char-count').textContent = '0';
+    document.getElementById('modal-count-enabled').checked = false;
+    document.getElementById('modal-count-group').style.display = 'none';
+    document.getElementById('modal-count').value = '1';
     clearModalAlert();
   });
 
   // Clear editingKey when modal fully closes so next Add click is fresh.
   document.getElementById('msg-modal').addEventListener('hidden.bs.modal', function() {
     editingKey = null;
+  });
+
+  // Toggle send-limit input visibility
+  document.getElementById('modal-count-enabled').addEventListener('change', function() {
+    document.getElementById('modal-count-group').style.display = this.checked ? '' : 'none';
   });
 
   // ── Open modal (edit) ─────────────────────────────────────────────────────
@@ -289,6 +317,10 @@
     });
     document.getElementById('modal-message').value = m.message;
     document.getElementById('modal-char-count').textContent = m.message.length;
+    const hasCount = m.count != null && m.count > 0;
+    document.getElementById('modal-count-enabled').checked = hasCount;
+    document.getElementById('modal-count-group').style.display = hasCount ? '' : 'none';
+    document.getElementById('modal-count').value = hasCount ? m.count : '1';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('msg-modal')).show();
   };
 
@@ -331,7 +363,10 @@
       const r = await fetch(url, {
         method,
         headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
-        body: JSON.stringify({key, channel, message}),
+        body: JSON.stringify({key, channel, message,
+          count: document.getElementById('modal-count-enabled').checked
+            ? (parseInt(document.getElementById('modal-count').value) || 0)
+            : 0}),
       });
       const d = await r.json();
       if (r.ok && d.success) {

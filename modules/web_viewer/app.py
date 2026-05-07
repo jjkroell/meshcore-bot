@@ -2204,9 +2204,17 @@ class BotDataViewer:
                         continue
                     ch_raw = channel.strip()
                     ch_list = [c.strip() for c in ch_raw.split(',') if c.strip()]
+                    msg_raw = message.strip()
+                    import re as _re
+                    _cm = _re.search(r'::(\d+)\s*$', msg_raw)
+                    if _cm:
+                        count = int(_cm.group(1))
+                        msg_raw = msg_raw[:_cm.start()].rstrip()
+                    else:
+                        count = None
                     messages.append({'key': key, 'type': msg_type, 'label': label,
                                      'channel': ch_raw, 'channels': ch_list,
-                                     'message': message.strip()})
+                                     'message': msg_raw, 'count': count})
             return jsonify({'messages': messages})
 
         @self.app.route('/api/scheduled-messages', methods=['POST'])
@@ -6233,6 +6241,11 @@ class BotDataViewer:
         orig_key = str(data.get('original_key', '')).strip().lower()
         channel  = str(data.get('channel', '')).strip()
         message  = str(data.get('message', '')).strip()
+        try:
+            count = int(data.get('count') or 0)
+            count = max(0, count)
+        except (TypeError, ValueError):
+            count = 0
 
         if action in ('create', 'update'):
             if not valid_key(key):
@@ -6242,6 +6255,8 @@ class BotDataViewer:
             for _val, _name in [(channel, 'channel'), (message, 'message')]:
                 if any(c in _val for c in ('\n', '\r', '[')):
                     return _jsonify({'error': f"'{_name}' contains invalid characters"}), 400
+            if count > 0:
+                message = f"{message}::{count}"
 
         # Read config file as text to preserve comments in other sections
         try:

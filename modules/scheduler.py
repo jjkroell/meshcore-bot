@@ -82,21 +82,34 @@ class MessageScheduler:
                         self.logger.warning(f"Invalid time format '{time_str}' for scheduled message: {message_info}")
                         continue
 
-                    channel, message = message_info.split(':', 1)
+                    channel, raw_msg = message_info.split(':', 1)
                     channel = channel.strip()
-                    message = decode_escape_sequences(message.strip())
+                    raw_msg = raw_msg.strip()
+                    raw_msg_clean, count = self._parse_count_suffix(raw_msg)
+                    message = decode_escape_sequences(raw_msg_clean)
                     hour = int(time_str[:2])
                     minute = int(time_str[2:])
+                    job_id = f"msg_{time_str}_{channel}"
 
-                    self._apscheduler.add_job(
-                        self.send_scheduled_message,
-                        CronTrigger(hour=hour, minute=minute),
-                        args=[channel, message],
-                        id=f"msg_{time_str}_{channel}",
-                        replace_existing=True,
-                    )
+                    if count is not None:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message_counted,
+                            CronTrigger(hour=hour, minute=minute),
+                            args=[channel, message, time_str, job_id],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Scheduled message: {hour:02d}:{minute:02d} -> {channel}: {message} [{count} remaining]")
+                    else:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message,
+                            CronTrigger(hour=hour, minute=minute),
+                            args=[channel, message],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Scheduled message: {hour:02d}:{minute:02d} -> {channel}: {message}")
                     self.scheduled_messages[time_str] = (channel, message)
-                    self.logger.info(f"Scheduled message: {hour:02d}:{minute:02d} -> {channel}: {message}")
                 except ValueError:
                     self.logger.warning(f"Invalid scheduled message format: {message_info}")
                 except Exception as e:
@@ -107,25 +120,39 @@ class MessageScheduler:
                 if not self._is_valid_interval_key(key):
                     continue
                 try:
-                    channel, message = message_info.split(':', 1)
+                    channel, raw_msg = message_info.split(':', 1)
                     channel = channel.strip()
-                    message = decode_escape_sequences(message.strip())
+                    raw_msg = raw_msg.strip()
+                    raw_msg_clean, count = self._parse_count_suffix(raw_msg)
+                    message = decode_escape_sequences(raw_msg_clean)
                     hours, minutes = self._parse_interval_key(key)
                     if hours == 0 and minutes == 0:
                         self.logger.warning(f"Interval key '{key}' parsed to zero duration — skipping")
                         continue
                     # Delay first fire by one full interval so restarts don't spam
                     first_fire = datetime.datetime.now() + datetime.timedelta(hours=hours, minutes=minutes)
-                    self._apscheduler.add_job(
-                        self.send_scheduled_message,
-                        IntervalTrigger(hours=hours, minutes=minutes, start_date=first_fire),
-                        args=[channel, message],
-                        id=f"interval_{key}_{channel}",
-                        replace_existing=True,
-                    )
-                    self.scheduled_messages[key] = (channel, message)
+                    job_id = f"interval_{key}_{channel}"
                     total = hours * 60 + minutes
-                    self.logger.info(f"Interval message every {total}min -> {channel}: {message}")
+
+                    if count is not None:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message_counted,
+                            IntervalTrigger(hours=hours, minutes=minutes, start_date=first_fire),
+                            args=[channel, message, key, job_id],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Interval message every {total}min -> {channel}: {message} [{count} remaining]")
+                    else:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message,
+                            IntervalTrigger(hours=hours, minutes=minutes, start_date=first_fire),
+                            args=[channel, message],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Interval message every {total}min -> {channel}: {message}")
+                    self.scheduled_messages[key] = (channel, message)
                 except ValueError:
                     self.logger.warning(f"Invalid interval message format: {message_info}")
                 except Exception as e:
@@ -230,6 +257,63 @@ class MessageScheduler:
         if self.bot.config.get('Bot', 'auto_manage_contacts', fallback='false').lower() != 'device':
             return
         self._run_async_on_main_loop(self._device_mode_favourite_pass2_coro(), timeout=600.0)
+
+    def _parse_count_suffix(self, raw_value: str) -> tuple[str, int | None]:
+        """Strip ::N count suffix from a raw config value. Returns (value, count_or_None)."""
+        import re
+        m = re.search(r'::(\d+)\s*$', raw_value)
+        if m:
+            count = int(m.group(1))
+            return raw_value[:m.start()].rstrip(), count if count > 0 else None
+        return raw_value, None
+
+    def _decrement_scheduled_count(self, config_key: str, job_id: str, base_value: str, remaining: int) -> None:
+        """Decrement the ::N counter in config after a send. Removes entry and job when exhausted."""
+        import configparser as _cp
+        new_count = remaining - 1
+        try:
+            fresh = _cp.ConfigParser()
+            fresh.read(self.bot.config_file, encoding='utf-8')
+            if not fresh.has_section('Scheduled_Messages'):
+                return
+            if new_count <= 0:
+                fresh.remove_option('Scheduled_Messages', config_key)
+                if self.bot.config.has_section('Scheduled_Messages'):
+                    self.bot.config.remove_option('Scheduled_Messages', config_key)
+                try:
+                    self._apscheduler.remove_job(job_id)
+                except Exception:
+                    pass
+                self.logger.info(f"Scheduled message '{config_key}' reached send limit — removed")
+            else:
+                fresh.set('Scheduled_Messages', config_key, f"{base_value}::{new_count}")
+                self.logger.info(f"Scheduled message '{config_key}': {new_count} send(s) remaining")
+            with open(self.bot.config_file, 'w', encoding='utf-8') as _f:
+                fresh.write(_f)
+        except Exception as e:
+            self.logger.error(f"Error updating count for scheduled message '{config_key}': {e}")
+
+    def send_scheduled_message_counted(self, channel: str, message: str, config_key: str, job_id: str) -> None:
+        """Send a count-limited scheduled message, decrementing the counter in config after each send."""
+        import configparser as _cp
+        # Read current remaining count fresh from config
+        fresh = _cp.ConfigParser()
+        fresh.read(self.bot.config_file, encoding='utf-8')
+        if not fresh.has_section('Scheduled_Messages') or not fresh.has_option('Scheduled_Messages', config_key):
+            return  # Already removed
+        raw_value = fresh.get('Scheduled_Messages', config_key)
+        base_value, remaining = self._parse_count_suffix(raw_value)
+        if remaining is None:
+            return  # Count was removed externally — fall through as unlimited
+        # Extract message portion (after first colon = channel:message)
+        try:
+            _, msg_part = raw_value.split(':', 1)
+            base_msg, _ = self._parse_count_suffix(msg_part.strip())
+            message = base_msg
+        except ValueError:
+            pass
+        self.send_scheduled_message(channel, message)
+        self._decrement_scheduled_count(config_key, job_id, base_value, remaining)
 
     def _is_valid_interval_key(self, key: str) -> bool:
         """Validate interval key format: every_Xh or every_XhYm (e.g. every_30h, every_6h30m)"""
