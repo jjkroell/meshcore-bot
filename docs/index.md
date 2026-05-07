@@ -27,6 +27,7 @@ Documentation for the MeshCore bot: setup, configuration, commands, and services
 | [Repeater Commands](repeater-commands.md) | Repeater management DM commands |
 | [Feed Management](feeds.md) | RSS/REST feeds and posting to channels |
 | [Web Viewer](web-viewer.md) | Web-based data viewer and API |
+| [Scheduled Messages](scheduled-messages.md) | Automated fixed-time and interval messages |
 
 ## Service Plugins
 

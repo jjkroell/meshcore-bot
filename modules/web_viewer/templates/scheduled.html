@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+{% block title %}Scheduled Messages — {{ bot_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Scheduled Messages</h5>
+    <button class="btn btn-primary btn-sm"
+            data-bs-toggle="modal" data-bs-target="#msg-modal">
+      <i class="fas fa-plus me-1"></i> Add Message
+    </button>
+  </div>
+
+  <div id="alert-box" class="alert d-none mb-3" role="alert"></div>
+
+  <!-- Messages table -->
+  <div class="card" style="background-color:var(--card-bg);border-color:var(--border-color);">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0" id="msg-table"
+               style="color:var(--text-color);border-color:var(--border-color);">
+          <thead style="background-color:var(--card-header-bg);">
+            <tr>
+              <th style="border-color:var(--border-color);">Time / Interval</th>
+              <th style="border-color:var(--border-color);">Channel</th>
+              <th style="border-color:var(--border-color);">Message</th>
+              <th style="border-color:var(--border-color); width:110px;"></th>
+            </tr>
+          </thead>
+          <tbody id="msg-body">
+            <tr id="loading-row">
+              <td colspan="4" class="text-center text-muted py-4">
+                No scheduled messages configured. Click <strong>Add Message</strong> to create one.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-2 text-muted" style="font-size:0.8rem;">
+    <i class="fas fa-info-circle me-1"></i>
+    <strong>Fixed time:</strong> HHMM (24h) — fires daily at that time.&nbsp;
+    <strong>Interval:</strong> <code>every_30h</code>, <code>every_6h30m</code> — fires every N hours/minutes, rotating through the day.
+    Changes take effect immediately without a restart.
+  </div>
+</div>
+
+<!-- Add / Edit modal -->
+<div class="modal fade" id="msg-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background-color:var(--card-bg);color:var(--text-color);border-color:var(--border-color);">
+      <div class="modal-header" style="border-color:var(--border-color);">
+        <h5 class="modal-title" id="modal-title">Add Scheduled Message</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"
+                style="filter:var(--bs-btn-close-filter,none);"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-alert" class="alert d-none" role="alert"></div>
+
+        <div class="mb-3">
+          <label class="form-label">Type</label>
+          <div class="d-flex gap-3">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="msg-type" id="type-fixed" value="fixed" checked>
+              <label class="form-check-label" for="type-fixed">Fixed daily time</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="msg-type" id="type-interval" value="interval">
+              <label class="form-check-label" for="type-interval">Interval (rotating)</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fixed time inputs -->
+        <div id="fixed-inputs" class="mb-3">
+          <label class="form-label">Time (24h)</label>
+          <div class="d-flex gap-2 align-items-center">
+            <input type="number" class="form-control" id="fixed-hour" min="0" max="23"
+                   placeholder="HH" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            <span>:</span>
+            <input type="number" class="form-control" id="fixed-minute" min="0" max="59"
+                   placeholder="MM" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+          </div>
+          <div class="form-text">24-hour format — e.g. 8:00 = 8:00 AM, 17:30 = 5:30 PM.</div>
+        </div>
+
+        <!-- Interval inputs -->
+        <div id="interval-inputs" class="mb-3 d-none">
+          <label class="form-label">Interval</label>
+          <div class="d-flex gap-2 align-items-center">
+            <input type="number" class="form-control" id="interval-hours" min="0" max="999"
+                   placeholder="Hours" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            <span>h</span>
+            <input type="number" class="form-control" id="interval-minutes" min="0" max="59"
+                   placeholder="Min" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            <span>m</span>
+          </div>
+          <div class="form-text">e.g. 30h 0m = every 30 hours (rotates through the day).</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Channel</label>
+          <select class="form-select" id="modal-channel" multiple size="4"
+                  style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            {% for ch in channels %}
+            <option value="{{ ch }}">{{ ch }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Hold Ctrl / Cmd to select multiple channels.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Message</label>
+          <textarea class="form-control" id="modal-message" rows="3" maxlength="200"
+                    style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);resize:vertical;"
+                    placeholder="Message text…"></textarea>
+          <div class="form-text"><span id="modal-char-count">0</span> / 200 characters</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-color:var(--border-color);">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="modal-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete confirm modal -->
+<div class="modal fade" id="delete-modal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content" style="background-color:var(--card-bg);color:var(--text-color);border-color:var(--border-color);">
+      <div class="modal-header" style="border-color:var(--border-color);">
+        <h5 class="modal-title">Delete Message</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete this scheduled message?
+      </div>
+      <div class="modal-footer" style="border-color:var(--border-color);">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-btn">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  let messages = [];
+  let editingKey = null;
+  let deletingKey = null;
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function showAlert(msg, type='danger') {
+    const b = document.getElementById('alert-box');
+    b.className = `alert alert-${type}`;
+    b.innerHTML = msg;
+    b.classList.remove('d-none');
+    setTimeout(() => b.classList.add('d-none'), 5000);
+  }
+  function modalAlert(msg, type='danger') {
+    const b = document.getElementById('modal-alert');
+    b.className = `alert alert-${type}`;
+    b.textContent = msg;
+    b.classList.remove('d-none');
+  }
+  function clearModalAlert() {
+    document.getElementById('modal-alert').classList.add('d-none');
+  }
+
+  // ── Load & render ─────────────────────────────────────────────────────────
+  async function loadMessages() {
+    try {
+      const r = await fetch('/api/scheduled-messages', {headers:{'X-Requested-With':'XMLHttpRequest'}});
+      const d = await r.json();
+      messages = d.messages || [];
+      renderTable();
+    } catch(e) {
+      document.getElementById('msg-body').innerHTML =
+        `<tr><td colspan="4" class="text-center text-danger py-4">Failed to load: ${escHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  function renderTable() {
+    const tbody = document.getElementById('msg-body');
+    if (!messages.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No scheduled messages configured. Click <strong>Add Message</strong> to create one.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = messages.map(m => `
+      <tr>
+        <td style="border-color:var(--border-color);">
+          <span class="badge ${m.type==='fixed'?'bg-primary':'bg-success'} me-1">
+            ${m.type==='fixed'?'Fixed':'Interval'}
+          </span>
+          ${escHtml(m.label)}
+        </td>
+        <td style="border-color:var(--border-color);">${m.channels.map(c => `<code>${escHtml(c)}</code>`).join(' ')}</td>
+        <td style="border-color:var(--border-color);">${escHtml(m.message)}</td>
+        <td style="border-color:var(--border-color);">
+          <button class="btn btn-outline-secondary btn-sm me-1" onclick="openEdit(${escHtml(JSON.stringify(m.key))})">
+            <i class="fas fa-edit"></i>
+          </button>
+          <button class="btn btn-outline-danger btn-sm" onclick="confirmDelete(${escHtml(JSON.stringify(m.key))})">
+            <i class="fas fa-trash"></i>
+          </button>
+        </td>
+      </tr>`).join('');
+  }
+
+  // ── Type toggle ───────────────────────────────────────────────────────────
+  document.querySelectorAll('input[name="msg-type"]').forEach(r => {
+    r.addEventListener('change', () => {
+      const isFixed = document.getElementById('type-fixed').checked;
+      document.getElementById('fixed-inputs').classList.toggle('d-none', !isFixed);
+      document.getElementById('interval-inputs').classList.toggle('d-none', isFixed);
+    });
+  });
+
+  document.getElementById('modal-message').addEventListener('input', function() {
+    document.getElementById('modal-char-count').textContent = this.value.length;
+  });
+
+  // ── Modal events ──────────────────────────────────────────────────────────
+  // Fires when Bootstrap opens the modal. If editingKey is null (Add button clicked),
+  // reset the form to a clean "Add" state.
+  document.getElementById('msg-modal').addEventListener('show.bs.modal', function() {
+    if (editingKey !== null) return;
+    document.getElementById('modal-title').textContent = 'Add Scheduled Message';
+    document.getElementById('type-fixed').checked = true;
+    document.getElementById('fixed-inputs').classList.remove('d-none');
+    document.getElementById('interval-inputs').classList.add('d-none');
+    document.getElementById('fixed-hour').value = '';
+    document.getElementById('fixed-minute').value = '';
+    document.getElementById('interval-hours').value = '';
+    document.getElementById('interval-minutes').value = '';
+    Array.from(document.getElementById('modal-channel').options).forEach(o => o.selected = false);
+    document.getElementById('modal-message').value = '';
+    document.getElementById('modal-char-count').textContent = '0';
+    clearModalAlert();
+  });
+
+  // Clear editingKey when modal fully closes so next Add click is fresh.
+  document.getElementById('msg-modal').addEventListener('hidden.bs.modal', function() {
+    editingKey = null;
+  });
+
+  // ── Open modal (edit) ─────────────────────────────────────────────────────
+  window.openEdit = function(key) {
+    const m = messages.find(x => x.key === key);
+    if (!m) return;
+    editingKey = key; // set BEFORE .show() so show.bs.modal skips the reset
+    document.getElementById('modal-title').textContent = 'Edit Scheduled Message';
+    clearModalAlert();
+
+    if (m.type === 'fixed') {
+      document.getElementById('type-fixed').checked = true;
+      document.getElementById('fixed-inputs').classList.remove('d-none');
+      document.getElementById('interval-inputs').classList.add('d-none');
+      document.getElementById('fixed-hour').value = parseInt(key.slice(0,2), 10);
+      document.getElementById('fixed-minute').value = parseInt(key.slice(2,4), 10);
+      document.getElementById('interval-hours').value = '';
+      document.getElementById('interval-minutes').value = '';
+    } else {
+      document.getElementById('type-interval').checked = true;
+      document.getElementById('fixed-inputs').classList.add('d-none');
+      document.getElementById('interval-inputs').classList.remove('d-none');
+      const hMatch = key.match(/(\d+)h/);
+      const mMatch = key.match(/(\d+)m/);
+      document.getElementById('interval-hours').value   = hMatch ? hMatch[1] : '';
+      document.getElementById('interval-minutes').value = mMatch ? mMatch[1] : '';
+      document.getElementById('fixed-hour').value = '';
+      document.getElementById('fixed-minute').value = '';
+    }
+
+    const chList = m.channel.split(',').map(c => c.trim());
+    Array.from(document.getElementById('modal-channel').options).forEach(o => {
+      o.selected = chList.includes(o.value);
+    });
+    document.getElementById('modal-message').value = m.message;
+    document.getElementById('modal-char-count').textContent = m.message.length;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('msg-modal')).show();
+  };
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  document.getElementById('modal-save-btn').addEventListener('click', async function() {
+    clearModalAlert();
+    const isFixed = document.getElementById('type-fixed').checked;
+    const channel = Array.from(document.getElementById('modal-channel').selectedOptions).map(o => o.value).join(',');
+    const message = document.getElementById('modal-message').value.trim();
+    const btn     = this;
+
+    let key;
+    if (isFixed) {
+      const hh = document.getElementById('fixed-hour').value;
+      const mm = document.getElementById('fixed-minute').value;
+      if (hh === '' || mm === '') { modalAlert('Please enter a time (HH and MM).'); return; }
+      const h = parseInt(hh), m = parseInt(mm);
+      if (isNaN(h) || h < 0 || h > 23) { modalAlert('Hour must be 0–23.'); return; }
+      if (isNaN(m) || m < 0 || m > 59) { modalAlert('Minute must be 0–59.'); return; }
+      key = String(h).padStart(2,'0') + String(m).padStart(2,'0');
+    } else {
+      const h = parseInt(document.getElementById('interval-hours').value)   || 0;
+      const m = parseInt(document.getElementById('interval-minutes').value) || 0;
+      if (h === 0 && m === 0) { modalAlert('Interval must be greater than zero.'); return; }
+      key = 'every_' + (h ? h + 'h' : '') + (m ? m + 'm' : '');
+    }
+
+    if (!channel) { modalAlert('Please select at least one channel.'); return; }
+    if (!message) { modalAlert('Message is required.'); return; }
+
+    btn.disabled = true;
+    const origLabel = btn.textContent;
+    btn.textContent = 'Saving…';
+
+    try {
+      const method = editingKey ? 'PUT' : 'POST';
+      const url    = editingKey
+        ? `/api/scheduled-messages/${encodeURIComponent(editingKey)}`
+        : '/api/scheduled-messages';
+      const r = await fetch(url, {
+        method,
+        headers: {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+        body: JSON.stringify({key, channel, message}),
+      });
+      const d = await r.json();
+      if (r.ok && d.success) {
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('msg-modal')).hide();
+        showAlert('<i class="fas fa-check-circle me-1"></i> Saved and scheduler reloaded.', 'success');
+        await loadMessages();
+      } else {
+        modalAlert(d.error || 'Unknown error');
+      }
+    } catch(e) {
+      modalAlert('Network error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origLabel;
+    }
+  });
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+  window.confirmDelete = function(key) {
+    deletingKey = key;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('delete-modal')).show();
+  };
+
+  document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+    if (!deletingKey) return;
+    const btn = document.getElementById('confirm-delete-btn');
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/scheduled-messages/${encodeURIComponent(deletingKey)}`, {
+        method: 'DELETE',
+        headers: {'X-Requested-With':'XMLHttpRequest'},
+      });
+      const d = await r.json();
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('delete-modal')).hide();
+      if (r.ok && d.success) {
+        showAlert('<i class="fas fa-check-circle me-1"></i> Deleted and scheduler reloaded.', 'success');
+        await loadMessages();
+      } else {
+        showAlert(d.error || 'Delete failed', 'danger');
+      }
+    } catch(e) {
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('delete-modal')).hide();
+      showAlert('Network error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      deletingKey = null;
+    }
+  });
+
+  loadMessages();
+})();
+</script>
+{% endblock %}

@@ -534,12 +534,10 @@ class ModernDashboard {
     updateTopUsers(users) {
         const container = document.getElementById('top-users-list');
         container.innerHTML = users.map((user, index) => `
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <div class="d-flex align-items-center">
-                    <span class="badge bg-success me-2">${index + 1}</span>
-                    <span class="fw-bold text-truncate" style="max-width: 200px;" title="${user.user}">${user.user}</span>
-                </div>
-                <span class="badge bg-info">${user.count} messages</span>
+            <div class="d-flex align-items-center mb-2 gap-2">
+                <span class="badge bg-success flex-shrink-0">${index + 1}</span>
+                <span class="fw-bold text-truncate flex-grow-1" style="min-width:0;" title="${user.user}">${user.user}</span>
+                <span class="badge bg-info flex-shrink-0">${user.count} msgs</span>
             </div>
         `).join('');
     }
@@ -608,12 +606,12 @@ class ModernDashboard {
     updateTopChannels(channels) {
         const container = document.getElementById('top-channels-list');
         container.innerHTML = channels.map((channel, index) => `
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <div class="d-flex align-items-center">
-                    <span class="badge bg-primary me-2">${index + 1}</span>
-                    <span class="fw-bold text-truncate" style="max-width: 200px;" title="${channel.channel}">${channel.channel}</span>
+            <div class="mb-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-primary flex-shrink-0">${index + 1}</span>
+                    <span class="fw-bold text-truncate flex-grow-1" style="min-width:0;" title="${channel.channel}">${channel.channel}</span>
                 </div>
-                <div class="text-end">
+                <div class="ms-4 mt-1">
                     <span class="badge bg-secondary me-1">${channel.messages} msgs</span>
                     <span class="badge bg-info">${channel.users} users</span>
                 </div>
@@ -684,7 +682,7 @@ class ModernDashboard {
     
     updateTimestamp() {
         const now = new Date();
-        const timestamp = now.toLocaleTimeString();
+        const timestamp = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZoneName: 'short'});
         document.getElementById('last-update').textContent = timestamp;
     }
     
