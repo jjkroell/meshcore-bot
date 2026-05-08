@@ -73,8 +73,16 @@ class FerryCommand(BaseCommand):
         return TERMINAL_ALIASES.get(text.lower())
 
     @staticmethod
-    def _format_sailing(s):
-        parts = [s['time']]
+    def _to24(time_str):
+        try:
+            import datetime
+            return datetime.datetime.strptime(time_str.strip(), '%I:%M %p').strftime('%H:%M')
+        except ValueError:
+            return time_str
+
+    @classmethod
+    def _format_sailing(cls, s):
+        parts = [cls._to24(s['time'])]
         fill = s.get('fill', 0)
         car = s.get('carFill', 0)
         if fill or car:
@@ -85,7 +93,19 @@ class FerryCommand(BaseCommand):
 
     @staticmethod
     def _upcoming(sailings, limit=3):
-        return [s for s in sailings if s.get('sailingStatus') in ('current', 'future')][:limit]
+        import datetime
+        now = datetime.datetime.now().strftime('%H:%M')
+        result = []
+        for s in sailings:
+            if s.get('sailingStatus') != 'future':
+                continue
+            try:
+                t = datetime.datetime.strptime(s['time'].strip(), '%I:%M %p').strftime('%H:%M')
+                if t >= now:
+                    result.append(s)
+            except (ValueError, KeyError):
+                result.append(s)
+        return result[:limit]
 
     async def execute(self, message: MeshMessage) -> bool:
         try:
