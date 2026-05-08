@@ -203,6 +203,7 @@ class BotDataViewer:
         self.web_viewer_password = normalized_web_viewer_password(self.config)
         # In-memory login failure tracker: {ip: [timestamp, ...]}
         self._login_failures: dict = {}
+        self._ensure_sent_log_table()
         if self.web_viewer_password:
             self.logger.info("Web viewer authentication enabled")
         else:
@@ -389,6 +390,39 @@ class BotDataViewer:
         except Exception as e:
             self.logger.error(f"Failed to initialize databases: {e}")
             raise
+
+    def _ensure_sent_log_table(self):
+        """Create web_sent_log table if it doesn't exist."""
+        try:
+            with self._get_db_connection() as conn:
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS web_sent_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source TEXT NOT NULL,
+                        channel TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        sent_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
+                    )
+                ''')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_web_sent_log_source ON web_sent_log(source, sent_at)')
+                conn.commit()
+        except Exception as e:
+            self.logger.error(f"Error creating web_sent_log table: {e}")
+
+    def _log_sent_message(self, channel: str, message: str, source: str):
+        """Log a sent message to web_sent_log."""
+        try:
+            with self._get_db_connection() as conn:
+                conn.execute(
+                    "INSERT INTO web_sent_log (source, channel, message) VALUES (?, ?, ?)",
+                    (source, channel, message)
+                )
+                conn.execute(
+                    "DELETE FROM web_sent_log WHERE sent_at < strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime', '-30 days')"
+                )
+                conn.commit()
+        except Exception as e:
+            self.logger.error(f"Error logging sent message: {e}")
 
     def _get_db_connection(self):
         """Get database connection - create new connection for each request to avoid threading issues"""
@@ -2262,10 +2296,31 @@ class BotDataViewer:
             try:
                 with _req.urlopen(webhook_req, timeout=10) as resp:
                     result = json.loads(resp.read().decode())
+                    if result.get('success') or result.get('status') == 'ok':
+                        self._log_sent_message(channel, message, 'manual')
                     return jsonify(result)
             except Exception as exc:
                 self.logger.error('Send message proxy error: %s', exc)
                 return jsonify({'error': str(exc)}), 502
+
+        @self.app.route('/api/sent-log')
+        def api_sent_log():
+            """Return sent message history filtered by source (manual/scheduled)."""
+            source = request.args.get('source', 'manual')
+            if source not in ('manual', 'scheduled'):
+                return jsonify({'error': 'source must be manual or scheduled'}), 400
+            try:
+                with self._get_db_connection() as conn:
+                    rows = conn.execute(
+                        '''SELECT channel, message, sent_at FROM web_sent_log
+                           WHERE source = ?
+                           AND sent_at >= strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime', '-30 days')
+                           ORDER BY sent_at DESC LIMIT 200''',
+                        (source,)
+                    ).fetchall()
+                return jsonify({'log': [dict(r) for r in rows]})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
 
         @self.app.route('/admin/config')
         def admin_config():

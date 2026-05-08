@@ -53,14 +53,21 @@
                         </div>
                     </form>
 
-                    <hr style="border-color: var(--border-color);">
-
-                    <h6 class="text-muted mb-2"><i class="fas fa-history me-1"></i> Recent Sends</h6>
-                    <ul class="list-unstyled mb-0" id="history-list" style="font-size: 0.875rem;">
-                        <li class="text-muted fst-italic">No messages sent yet this session.</li>
-                    </ul>
-
                     {% endif %}
+                </div>
+            </div>
+
+            <!-- Recently Sent card -->
+            <div class="card mt-4" style="background-color: var(--card-bg); border-color: var(--border-color);">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="background-color: var(--card-header-bg); border-color: var(--border-color);">
+                    <h6 class="mb-0"><i class="fas fa-history me-2"></i>Recently Sent Messages</h6>
+                    <small class="text-muted">Last 30 days</small>
+                </div>
+                <div class="card-body p-0">
+                    <div id="sent-log-container" style="max-height: 400px; overflow-y: auto;">
+                        <ul class="list-unstyled mb-0" id="sent-log-list" style="font-size: 0.875rem;"></ul>
+                    </div>
                 </div>
             </div>
 
@@ -68,8 +75,79 @@
     </div>
 </div>
 
+<style>
+.ch-arrow { display: inline-block; transition: transform 0.2s ease; }
+details[open] .ch-arrow { transform: rotate(90deg); }
+</style>
+
 <script>
 (function () {
+    function escHtml(str) {
+        return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function groupSentLog(entries) {
+        const groups = [];
+        for (const e of entries) {
+            const t = new Date(e.sent_at).getTime();
+            const last = groups[groups.length - 1];
+            if (last && last.message === e.message && (last._lastT - t) <= 10000) {
+                last.channels.push(e.channel);
+                last._lastT = t;
+            } else {
+                groups.push({ sent_at: e.sent_at, message: e.message, channels: [e.channel], _lastT: t });
+            }
+        }
+        return groups;
+    }
+
+    function renderSentGroup(g) {
+        const ts = new Date(g.sent_at).toLocaleString([], {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: false
+        });
+        const msg = g.message.length > 100 ? g.message.slice(0, 100) + '…' : g.message;
+        const liStyle = 'border-color:var(--border-color)!important;font-size:0.85rem;';
+        if (g.channels.length === 1) {
+            return `<li class="px-3 py-2 border-bottom" style="${liStyle}">
+                <span class="text-muted me-1">${escHtml(ts)}</span>
+                <span class="badge bg-secondary me-1">${escHtml(g.channels[0])}</span>
+                <span>${escHtml(msg)}</span>
+            </li>`;
+        }
+        const badges = g.channels.map(c => `<span class="badge bg-secondary me-1">${escHtml(c)}</span>`).join('');
+        return `<li class="px-3 py-2 border-bottom" style="${liStyle}">
+            <details>
+                <summary style="cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:0.35rem;flex-wrap:wrap;">
+                    <span class="text-muted">${escHtml(ts)}</span>
+                    <span class="badge bg-primary">${g.channels.length} channels <span class="ch-arrow">▸</span></span>
+                    <span>${escHtml(msg)}</span>
+                </summary>
+                <div class="mt-1 ps-1">${badges}</div>
+            </details>
+        </li>`;
+    }
+
+    async function loadSentLog() {
+        const list = document.getElementById('sent-log-list');
+        try {
+            const resp = await fetch('/api/sent-log?source=manual', {
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            });
+            const data = await resp.json();
+            const entries = data.log || [];
+            if (!entries.length) {
+                list.innerHTML = '<li class="px-3 py-2 text-muted fst-italic">No messages sent in the last 30 days.</li>';
+                return;
+            }
+            list.innerHTML = groupSentLog(entries).map(renderSentGroup).join('');
+        } catch (err) {
+            list.innerHTML = `<li class="px-3 py-2 text-danger">Failed to load: ${escHtml(err.message)}</li>`;
+        }
+    }
+
+    loadSentLog();
+
     const form = document.getElementById('send-form');
     if (!form) return;
 
@@ -79,7 +157,6 @@
     const clearBtn      = document.getElementById('clear-btn');
     const alertBox      = document.getElementById('alert-box');
     const charCount     = document.getElementById('char-count');
-    const historyList   = document.getElementById('history-list');
 
     messageInput.addEventListener('input', () => {
         charCount.textContent = messageInput.value.length;
@@ -113,9 +190,7 @@
                     body: JSON.stringify({ channel, message }),
                 });
                 const data = await resp.json();
-                if (resp.ok && data.ok) {
-                    addHistory(channel, message);
-                } else {
+                if (!resp.ok || !data.ok) {
                     errors.push(`${escHtml(channel)}: ${escHtml(data.error || 'Unknown error')}`);
                 }
             }
@@ -124,6 +199,7 @@
                 showAlert('success', `<i class="fas fa-check-circle me-1"></i> Message sent to ${dest}`);
                 messageInput.value = '';
                 charCount.textContent = '0';
+                loadSentLog();
             } else {
                 showAlert('danger', `<i class="fas fa-times-circle me-1"></i> Error sending to: ${errors.join('; ')}`);
             }
@@ -145,27 +221,6 @@
         alertBox.classList.add('d-none');
     }
 
-    function addHistory(channel, message) {
-        const placeholder = historyList.querySelector('.fst-italic');
-        if (placeholder) placeholder.remove();
-
-        const time = new Date().toLocaleTimeString();
-        const li = document.createElement('li');
-        li.className = 'mb-1 pb-1 border-bottom';
-        li.style.borderColor = 'var(--border-color)';
-        li.innerHTML = `<span class="text-muted">${escHtml(time)}</span>
-            <span class="badge bg-secondary ms-1">${escHtml(channel)}</span>
-            <span class="ms-1">${escHtml(message.length > 80 ? message.slice(0, 80) + '…' : message)}</span>`;
-        historyList.prepend(li);
-
-        // Keep only last 10
-        const items = historyList.querySelectorAll('li');
-        if (items.length > 10) items[items.length - 1].remove();
-    }
-
-    function escHtml(str) {
-        return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    }
 })();
 </script>
 {% endblock %}

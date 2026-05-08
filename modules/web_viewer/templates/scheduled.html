@@ -22,8 +22,8 @@
                style="color:var(--text-color);border-color:var(--border-color);">
           <thead style="background-color:var(--card-header-bg);">
             <tr>
-              <th style="border-color:var(--border-color);">Time / Interval</th>
-              <th style="border-color:var(--border-color);">Channel</th>
+              <th style="border-color:var(--border-color); width:180px; white-space:nowrap;">Time / Interval</th>
+              <th style="border-color:var(--border-color);">Channel(s)</th>
               <th style="border-color:var(--border-color);">Message</th>
               <th style="border-color:var(--border-color); width:80px;">Sends</th>
               <th style="border-color:var(--border-color); width:110px;"></th>
@@ -47,6 +47,21 @@
     <strong>Interval:</strong> <code>every_30h</code>, <code>every_6h30m</code> — fires every N hours/minutes, rotating through the day.
     Changes take effect immediately without a restart.
   </div>
+
+  <!-- Recently Sent card -->
+  <div class="card mt-4" style="background-color:var(--card-bg);border-color:var(--border-color);">
+    <div class="card-header d-flex justify-content-between align-items-center"
+         style="background-color:var(--card-header-bg);border-color:var(--border-color);">
+      <h6 class="mb-0"><i class="fas fa-history me-2"></i>Recently Sent (Scheduled)</h6>
+      <small class="text-muted">Last 30 days</small>
+    </div>
+    <div class="card-body p-0">
+      <div style="max-height:400px;overflow-y:auto;">
+        <ul class="list-unstyled mb-0" id="sent-log-list" style="font-size:0.85rem;"></ul>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Add / Edit modal -->
@@ -167,6 +182,11 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+.ch-arrow { display: inline-block; transition: transform 0.2s ease; }
+details[open] .ch-arrow { transform: rotate(90deg); }
+</style>
+
 <script>
 (function () {
   let messages = [];
@@ -417,6 +437,67 @@
   });
 
   loadMessages();
+  loadSentLog();
+
+  function groupSentLog(entries) {
+    const groups = [];
+    for (const e of entries) {
+      const t = new Date(e.sent_at).getTime();
+      const last = groups[groups.length - 1];
+      if (last && last.message === e.message && (last._lastT - t) <= 10000) {
+        last.channels.push(e.channel);
+        last._lastT = t;
+      } else {
+        groups.push({ sent_at: e.sent_at, message: e.message, channels: [e.channel], _lastT: t });
+      }
+    }
+    return groups;
+  }
+
+  function renderSentGroup(g) {
+    const ts = new Date(g.sent_at).toLocaleString([], {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    });
+    const msg = g.message.length > 100 ? g.message.slice(0, 100) + '…' : g.message;
+    const liStyle = 'border-color:var(--border-color)!important;font-size:0.85rem;';
+    if (g.channels.length === 1) {
+      return `<li class="px-3 py-2 border-bottom" style="${liStyle}">
+        <span class="text-muted me-1">${escHtml(ts)}</span>
+        <span class="badge bg-secondary me-1">${escHtml(g.channels[0])}</span>
+        <span>${escHtml(msg)}</span>
+      </li>`;
+    }
+    const badges = g.channels.map(c => `<span class="badge bg-secondary me-1">${escHtml(c)}</span>`).join('');
+    return `<li class="px-3 py-2 border-bottom" style="${liStyle}">
+      <details>
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:0.35rem;flex-wrap:wrap;">
+          <span class="text-muted">${escHtml(ts)}</span>
+          <span class="badge bg-primary">${g.channels.length} channels <span class="ch-arrow">▸</span></span>
+          <span>${escHtml(msg)}</span>
+        </summary>
+        <div class="mt-1 ps-1">${badges}</div>
+      </details>
+    </li>`;
+  }
+
+  async function loadSentLog() {
+    const list = document.getElementById('sent-log-list');
+    try {
+      const resp = await fetch('/api/sent-log?source=scheduled', {
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+      });
+      const data = await resp.json();
+      const entries = data.log || [];
+      if (!entries.length) {
+        list.innerHTML = '<li class="px-3 py-2 text-muted fst-italic">No scheduled messages sent in the last 30 days.</li>';
+        return;
+      }
+      list.innerHTML = groupSentLog(entries).map(renderSentGroup).join('');
+    } catch (err) {
+      list.innerHTML = `<li class="px-3 py-2 text-danger">Failed to load: ${escHtml(err.message)}</li>`;
+    }
+  }
 })();
 </script>
 {% endblock %}

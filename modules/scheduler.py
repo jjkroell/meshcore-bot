@@ -554,6 +554,7 @@ class MessageScheduler:
                 self.logger.warning(f"Error fetching mesh info for scheduled message: {e}. Sending message as-is.")
 
         import asyncio as _asyncio
+        import sqlite3 as _sqlite3
         send_timeout = self.bot.config.getint('Bot', 'send_timeout_seconds', fallback=30)
         channels = [c.strip() for c in channel.split(',') if c.strip()]
         for i, ch in enumerate(channels):
@@ -565,6 +566,16 @@ class MessageScheduler:
                 self.bot.command_manager.send_channel_message(ch, message),
                 timeout=send_timeout,
             )
+            try:
+                db_path = self.bot.config.get('Bot', 'db_path', fallback='meshcore_bot.db')
+                with _sqlite3.connect(db_path, timeout=10) as _conn:
+                    _conn.execute(
+                        "INSERT INTO web_sent_log (source, channel, message) VALUES ('scheduled', ?, ?)",
+                        (ch, message)
+                    )
+                    _conn.commit()
+            except Exception as _e:
+                self.logger.debug(f"Could not log scheduled send: {_e}")
 
     def start(self):
         """Start the scheduler in a separate thread"""
