@@ -157,6 +157,8 @@ class FireCommand(BaseCommand):
                 page = f"{i + 1}/{total}"
                 chunks.append("\n".join([f"{header} {page}"] + batch))
 
+            if hasattr(self.bot.command_manager, '_last_response'):
+                self.bot.command_manager._last_response = chunks[0]
             await self.send_response_chunked(message, chunks)
             return True
 
