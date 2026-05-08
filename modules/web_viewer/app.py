@@ -2274,7 +2274,7 @@ class BotDataViewer:
             import urllib.request as _req
             data = request.get_json(silent=True) or {}
             channel = str(data.get('channel', '')).strip()
-            message = str(data.get('message', '')).strip()
+            message = str(data.get('message', '')).strip().replace('\\n', '\n')
             if not channel or not message:
                 return jsonify({'error': 'channel and message are required'}), 400
             webhook_port = self.config.getint('Webhook', 'port', fallback=8765)
