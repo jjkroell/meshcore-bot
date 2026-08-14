@@ -199,11 +199,14 @@ class PathCommand(BaseCommand):
         
         # Store the current message for use in _extract_path_from_recent_messages
         self._current_message = message
-        
+
+        # Reset per-invocation node IDs (set by _decode_path / _extract_path_from_recent_messages)
+        self._last_node_ids = []
+
         # Parse the message content to extract path data
         content = message.content.strip()
         parts = content.split()
-        
+
         if len(parts) < 2:
             # No arguments provided - try to extract path from current message
             response = await self._extract_path_from_recent_messages()
@@ -211,10 +214,26 @@ class PathCommand(BaseCommand):
             # Extract path data from the command
             path_input = " ".join(parts[1:])
             response = await self._decode_path(path_input)
-        
+
         # Send the response (may be split into multiple messages if long)
         await self._send_path_response(message, response)
+
+        # If every node in the decoded path used a 1-byte (2 hex char) ID, the sender's
+        # companion is set to 1-byte hashes - follow up with a heads-up about collisions
+        if self._last_node_ids and all(len(n) == 2 for n in self._last_node_ids):
+            await self._send_one_byte_notice(message)
+
         return True
+
+    async def _send_one_byte_notice(self, message: MeshMessage):
+        """Send a follow-up notice when the decoded path used 1-byte node IDs"""
+        try:
+            name = message.sender_id or self.translate('commands.path.unknown_name')
+            notice = self.translate('commands.path.one_byte_notice', name=name)
+            await asyncio.sleep(3.0)
+            await self.send_response(message, notice, skip_user_rate_limit=True)
+        except Exception as e:
+            self.logger.warning(f"Error sending one-byte path notice: {e}")
     
     async def _decode_path(self, path_input: str) -> str:
         """Decode hex path data to repeater names.
@@ -246,6 +265,7 @@ class PathCommand(BaseCommand):
             if not node_ids:
                 return self.translate('commands.path.no_valid_hex')
 
+            self._last_node_ids = node_ids
             self.logger.info(f"Decoding path with {len(node_ids)} nodes: {','.join(node_ids)}")
             repeater_info = await self._lookup_repeater_names(node_ids)
             return self._format_path_response(node_ids, repeater_info)
@@ -1739,6 +1759,7 @@ class PathCommand(BaseCommand):
                 path_nodes = routing_info.get('path_nodes', [])
                 if path_nodes:
                     node_ids = [n.upper() for n in path_nodes]
+                    self._last_node_ids = node_ids
                     self.logger.info(f"Decoding path from routing_info with {len(node_ids)} nodes: {','.join(node_ids)}")
                     repeater_info = await self._lookup_repeater_names(node_ids)
                     return self._format_path_response(node_ids, repeater_info)
