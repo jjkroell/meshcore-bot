@@ -1052,7 +1052,7 @@ class MessageScheduler:
                           'radio_reboot', 'radio_connect', 'radio_disconnect',
                           'firmware_read', 'firmware_write',
                           'radio_params_read', 'radio_params_write',
-                          'reload_scheduler'
+                          'reload_scheduler', 'purge_old_contacts'
                       )
                     ORDER BY created_at ASC
                     LIMIT 1
@@ -1097,6 +1097,18 @@ class MessageScheduler:
                 elif op_type == 'radio_params_write':
                     payload = json.loads(op['payload_data'] or '{}')
                     success, result_payload = await self._radio_params_write_op(payload)
+                elif op_type == 'purge_old_contacts':
+                    payload = json.loads(op['payload_data'] or '{}')
+                    hours = float(payload.get('hours', 24))
+                    reason = payload.get('reason', f'Web purge - contacts older than {hours}h')
+                    rm = getattr(self.bot, 'repeater_manager', None)
+                    if rm is None:
+                        success = False
+                        result_payload = {'error': 'repeater_manager not available'}
+                    else:
+                        counts = await rm.purge_all_contacts_older_than_hours(hours, reason)
+                        success = True
+                        result_payload = counts
                 else:
                     success = False
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple, Dict, Any
 from .base_command import BaseCommand
 from ..models import MeshMessage
-from ..utils import calculate_distance
+from ..utils import calculate_distance, decode_escape_sequences
 
 
 class TestCommand(BaseCommand):
@@ -141,7 +141,8 @@ class TestCommand(BaseCommand):
         """
         if self.bot.config.has_section('Keywords'):
             format_str = self.bot.config.get('Keywords', 'test', fallback=None)
-            return self._strip_quotes_from_config(format_str) if format_str else None
+            if format_str:
+                return decode_escape_sequences(self._strip_quotes_from_config(format_str))
         return None
     
     def _extract_path_node_ids(self, message: MeshMessage) -> List[str]:

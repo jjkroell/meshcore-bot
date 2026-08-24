@@ -2534,7 +2534,81 @@ class RepeaterManager:
         except Exception as e:
             self.logger.error(f"Error purging old repeaters: {e}")
             return 0
-    
+
+    async def purge_all_contacts_older_than_hours(self, hours: float, reason: str = "Manual purge - old contacts") -> dict:
+        """Purge all contacts (repeaters and companions) not seen within the given number of hours."""
+        cutoff = datetime.now() - timedelta(hours=hours)
+        self.logger.info(f"Purging all contacts older than {hours}h (cutoff: {cutoff.isoformat()})")
+
+        repeater_purged = 0
+        companion_purged = 0
+        failed = 0
+        seen_public_keys: set = set()
+
+        contacts_snapshot = list(self.bot.meshcore.contacts.items())
+
+        for contact_key, contact_data in contacts_snapshot:
+            public_key = contact_data.get('public_key', contact_key)
+            name = contact_data.get('adv_name', contact_data.get('name', 'Unknown'))
+            is_repeater = self._is_repeater_device(contact_data)
+            is_companion = self._is_companion_device(contact_data)
+
+            if not is_repeater and not is_companion:
+                continue
+
+            if public_key in seen_public_keys:
+                continue
+            seen_public_keys.add(public_key)
+
+            # Determine last-seen time
+            raw_ts = contact_data.get('last_advert') or contact_data.get('last_seen') or contact_data.get('timestamp')
+            if raw_ts is None:
+                # No timestamp — treat as old
+                last_seen_dt = datetime.min
+            else:
+                try:
+                    if isinstance(raw_ts, str):
+                        last_seen_dt = datetime.fromisoformat(raw_ts.replace('Z', '+00:00')).replace(tzinfo=None)
+                    elif isinstance(raw_ts, (int, float)):
+                        last_seen_dt = datetime.fromtimestamp(raw_ts)
+                    else:
+                        last_seen_dt = raw_ts
+                except Exception:
+                    last_seen_dt = datetime.min
+
+            if last_seen_dt >= cutoff:
+                self.logger.debug(f"Skipping recent contact {name} (last seen {last_seen_dt})")
+                continue
+
+            self.logger.info(f"Purging {'repeater' if is_repeater else 'companion'}: {name} (last seen {last_seen_dt})")
+
+            try:
+                if is_repeater:
+                    success = await self.purge_repeater_by_contact_key(contact_key, reason)
+                else:
+                    success = await self.purge_companion_from_contacts(public_key, reason)
+
+                if success:
+                    if is_repeater:
+                        repeater_purged += 1
+                    else:
+                        companion_purged += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                self.logger.error(f"Error purging {name}: {e}")
+                failed += 1
+
+            await asyncio.sleep(2)
+
+        total = repeater_purged + companion_purged
+        self.logger.info(f"Purge complete: {repeater_purged} repeaters, {companion_purged} companions, {failed} failed")
+
+        if total > 0:
+            await self._post_purge_contact_management()
+
+        return {'repeaters': repeater_purged, 'companions': companion_purged, 'failed': failed}
+
     async def _post_purge_contact_management(self):
         """Post-purge contact management: enable manual contact addition and discover new contacts manually"""
         try:

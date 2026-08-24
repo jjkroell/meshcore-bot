@@ -1,255 +1,247 @@
-# MeshCore Bot Web Viewer
+# MeshCore Bot Data Viewer
 
-A web-based interface for viewing, managing, and sending data through your MeshCore Bot.
+A web-based interface for viewing and analyzing data from your MeshCore Bot.
 
 ## Features
 
-- **Dashboard**: Live bot health, database statistics, top users/channels, and real-time packet feed
-- **Repeater Contacts**: Active repeater contacts with location, device type, and status
-- **Contact Tracking**: Full history of heard contacts with signal strength and routing data
-- **Send Message**: Send to one or more channels directly from the browser
-- **Scheduled Messages**: Create and manage fixed-time or interval-based automated messages
-- **Cache Data**: View cached geocoding and API responses
-- **Config Panel**: Structured settings with categorized topics and database tools
+- **Dashboard**: Overview of database statistics and bot status
+- **Repeater Contacts**: View active repeater contacts with location and status information
+- **Contact Tracking**: Complete history of all heard contacts with signal strength and routing data
+- **Config panel**: Structured settings with categorized topics and database tools
 - **Purging Log**: Audit trail of contact purging operations
-- **Real-time Updates**: Auto-refreshes every 30 seconds; live packet/command/message feed via WebSocket
+- **Real-time Updates**: Auto-refreshes every 30 seconds
 - **API Endpoints**: JSON API for programmatic access
-- **Password Authentication**: bcrypt-hashed login with brute-force rate limiting
-
----
 
 ## Quick Start
 
-### Option 1: Integrated with Bot (recommended)
-
-Edit `config.ini`:
-
-```ini
-[Web_Viewer]
-enabled = true
-auto_start = true
-host = 127.0.0.1
-port = 5000
-web_viewer_password = $2b$12$...   # see Password Setup below
-```
-
-The web viewer starts automatically with the bot.
-
-### Option 2: Standalone Mode
-
+### Option 1: Standalone Mode
 ```bash
-python3 -m modules.web_viewer.app --config config.ini --host 0.0.0.0 --port 5000
+# Install Flask if not already installed
+pip3 install flask
+
+# Start the web viewer (reads config from config.ini)
+python3 -m modules.web_viewer.app
+
+# Or use the restart script for standalone mode
+./restart_viewer.sh
+
+# Override configuration with command line arguments
+python3 -m modules.web_viewer.app --port 8080 --host 0.0.0.0
 ```
 
----
+### Option 2: Integrated with Bot
+1. Edit `config.ini` and set:
+   ```ini
+   [Web_Viewer]
+   enabled = true
+   auto_start = true
+   host = 127.0.0.1
+   port = 5000
+   ```
+
+2. The web viewer will start automatically with the bot
 
 ## Configuration
 
+The web viewer can be configured in the `[Web_Viewer]` section of `config.ini`:
+
 ```ini
 [Web_Viewer]
-# Enable or disable the web viewer
+# Enable or disable the web data viewer
 enabled = true
 
-# Host address
-# 127.0.0.1: localhost only
-# 0.0.0.0: accessible from any network interface
+# Web viewer host address
+# 127.0.0.1: Only accessible from localhost
+# 0.0.0.0: Accessible from any network interface
 host = 127.0.0.1
 
-# Port
+# Web viewer port
 port = 5000
 
-# Debug mode (development only)
+# Enable debug mode for the web viewer
 debug = false
 
-# Auto-start with bot
+# Auto-start web viewer with bot
 auto_start = false
-
-# bcrypt password hash — generate with hash_password.py (see below)
-web_viewer_password = $2b$12$...
 ```
-
----
-
-## Password Setup
-
-The web viewer is protected by a bcrypt-hashed password. Plain-text passwords are **not** accepted.
-
-Generate a hash with the included helper script:
-
-```bash
-sudo /opt/meshcore-bot/venv/bin/python3 /opt/meshcore-bot/hash_password.py
-```
-
-Paste the output into `config.ini`:
-
-```ini
-[Web_Viewer]
-web_viewer_password = $2b$12$...
-```
-
-Restart the bot after changing the password.
-
-> **Tip:** `config.ini` should be readable only by the bot user. Check permissions with `ls -l config.ini` and tighten with `chmod 640 config.ini` if needed.
-
----
 
 ## Accessing the Viewer
 
-Once started, open your browser and navigate to:
-
-- **Local access**: `http://localhost:5000` (or your configured port)
-- **Network access**: `http://YOUR_BOT_IP:5000` (requires `host = 0.0.0.0`)
-
----
+Once started, open your web browser and navigate to:
+- **Local access**: http://localhost:5005 (or your configured port)
+- **Network access**: http://YOUR_BOT_IP:5005 (if host is set to 0.0.0.0)
 
 ## Pages Overview
 
 ### Dashboard
-
-- Bot health status (uptime, connected clients, radio status)
-- Database statistics (contacts, messages, commands)
-- Top users, top channels, most popular commands
-- Longest path records
-- Live real-time feed of packets, commands, and messages
+- Database status and statistics
+- Contact counts and cache information
+- Quick navigation to other sections
 
 ### Repeater Contacts
-
-- Active repeater contacts with location info
-- Device types and status indicators
-- First/last seen timestamps and purge count
+- Active repeater contacts
+- Location information (city/coordinates)
+- Device types and status
+- First/last seen timestamps
+- Purge count tracking
 
 ### Contact Tracking
-
 - Complete history of all heard contacts
-- Signal strength, hop count, and routing data
-- Advertisement data and currently-tracked status
-
-### Send Message
-
-Send a message to one or more channels directly from the browser. Select multiple channels to send the same message to all of them (sent sequentially with automatic rate-limit spacing).
-
-### Scheduled Messages
-
-Manage automated messages on a fixed daily schedule or repeating interval. See [Scheduled Messages](scheduled-messages.md) for full documentation.
-
-### Cache Data
-
-- Geocoding cache entries
-- Generic cache entries (weather, sports, etc.)
-- Expiration status and cache value previews
+- Signal strength indicators
+- Hop count and routing information
+- Advertisement data
+- Currently tracked status
 
 ### Config
-
-- Categorized configuration view with left-nav topics
-- Core settings: notifications, log rotation, backup, maintenance
-- Database operations and database info
+- Categorized configuration topics in a left navigation column
+- Core settings such as notifications, log rotation, backup, and maintenance status
+- Database operations and database information views in the same tab
 
 ### Purging Log
-
-- Audit trail of contact purging operations with timestamps and reasons
-
----
-
-## Public Access via Cloudflare Tunnel
-
-For secure remote access without opening firewall ports, use a Cloudflare tunnel as a reverse proxy. Install `cloudflared` on the bot host and run the token command provided by the Cloudflare dashboard. The tunnel handles TLS termination; the web viewer stays on `host = 127.0.0.1` and is never exposed directly.
-
-Real client IPs are forwarded in the `CF-Connecting-IP` header, which the web viewer uses for login rate limiting.
-
----
+- Audit trail of contact purging operations
+- Timestamps and reasons
+- Contact names and public keys
 
 ## API Endpoints
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/stats` | Database statistics |
-| `GET /api/health` | Bot health and connected client count |
-| `GET /api/contacts` | Repeater contacts data |
-| `GET /api/tracking` | Contact tracking data |
-| `GET /api/scheduled-messages` | Current scheduled message entries |
+The viewer also provides JSON API endpoints:
 
-Example:
+- `GET /api/stats` - Database statistics
+- `GET /api/contacts` - Repeater contacts data
+- `GET /api/tracking` - Contact tracking data
 
+Example usage:
 ```bash
 curl http://localhost:5000/api/stats
 ```
 
----
-
-## Security
-
-- **Authentication**: bcrypt password hashing (cost factor 12) with constant-time comparison
-- **Brute-force protection**: Login rate limited to 10 attempts per 5-minute window per IP; `CF-Connecting-IP` is used when behind Cloudflare
-- **Session security**: Server-side sessions with a random `SECRET_KEY`; sessions expire after 8 hours of inactivity
-- **Input validation**: Channel and message fields reject newline and bracket injection
-- **Config file**: Store `config.ini` with `chmod 640` so only the bot user can read the password hash
-
----
-
 ## Database Requirements
 
-The viewer uses the same database as the bot (`[Bot] db_path`, typically `meshcore_bot.db`). Dashboard stats (message/command counts, top users, etc.) come from the `message_stats` and `command_stats` tables. To populate these when the `stats` chat command is disabled, set `collect_stats = true` under `[Stats_Command]`.
+The viewer uses the same database as the bot by default (`[Bot] db_path`, typically `meshcore_bot.db`). That single file holds repeater contacts, mesh graph, packet stream, and other data so the viewer can show everything.
 
----
+**Dashboard stats** (message/command counts, top users, etc.) come from the stats tables (`message_stats`, `command_stats`, `path_stats`). To populate these when the `stats` chat command is disabled, you can set the optional config under `[Stats_Command]`: `collect_stats = true`.
 
-## Migrating from a Separate Web Viewer Database
+## Migrating from a separate web viewer database
 
-If you previously used a separate database (`[Web_Viewer] db_path = bot_data.db`):
+If you previously had the web viewer using a **separate** database (e.g. `[Web_Viewer] db_path = bot_data.db`), you can switch to the shared database so the viewer shows repeater/graph data and uses one file.
 
-1. **Stop the bot and web viewer.**
+1. **Stop the bot and web viewer** so neither has the databases open.
 
-2. **Optionally migrate packet stream history:**
-   ```bash
-   python3 migrate_webviewer_db.py bot_data.db meshcore_bot.db
-   ```
+2. **Optionally preserve packet stream history** from the old viewer DB into the main DB:
+   - From the project root, run:
+     ```bash
+     python3 migrate_webviewer_db.py bot_data.db meshcore_bot.db
+     ```
+     Use your actual paths if they differ (e.g. full paths or different filenames). The script copies the `packet_stream` table from the first file into the second and skips rows that would duplicate IDs.
+   - If you don’t care about old packet stream data, skip this step; the viewer will create a new `packet_stream` table in the main DB.
 
-3. **Point the viewer at the main database:**
+3. **Point the viewer at the main database** in `config.ini`:
    ```ini
    [Web_Viewer]
    db_path = meshcore_bot.db
    ```
+   (Or the same value as `[Bot] db_path` if you use a different path.)
 
-4. **Start the bot.** The viewer will now share one database with the bot.
+4. **Start the bot (and viewer as usual)**. The viewer will now read and write to the same database as the bot.
 
----
+You can keep or remove the old `bot_data.db` file after verifying the viewer works with the shared DB.
 
 ## Troubleshooting
 
-### Web viewer not accessible (SBC / Orange Pi)
+### Web viewer not accessible (e.g. Orange Pi / SBC)
 
-1. **Confirm config** — `enabled = true`, `auto_start = true`, `host = 0.0.0.0`, correct `port`. Restart after changes.
+If the viewer does not load from another device (e.g. from your phone or PC while the bot runs on an Orange Pi), work through these steps on the Pi.
 
-2. **Check the process is listening:**
+1. **Confirm config**
+   - In `config.ini` under `[Web_Viewer]`:
+     - `enabled = true`
+     - `auto_start = true` (if you want it to start with the bot)
+     - `host = 0.0.0.0` (required for access from other devices; `127.0.0.1` is localhost only)
+     - `port = 8080` (or another port 1024–65535)
+   - Restart the bot after changing config.
+
+2. **Check that the viewer process is running**
    ```bash
-   ss -tlnp | grep 5000
+   # From project root on the Pi
+   ss -tlnp | grep 8080
+   # or
+   netstat -tlnp | grep 8080
    ```
+   If nothing listens on your port, the viewer did not start or has exited.
 
-3. **Inspect logs:**
-   - `logs/web_viewer_stdout.log`
-   - `logs/web_viewer_stderr.log`
+3. **Inspect viewer logs**
+   - When run by the bot, the viewer writes to:
+     - `logs/web_viewer_stdout.log`
+     - `logs/web_viewer_stderr.log`
+   - Look for Python tracebacks, "Address already in use", or missing dependencies (e.g. Flask, flask-socketio).
+   - Optional: run the viewer manually to see errors in the terminal:
+     ```bash
+     cd /path/to/meshcore-bot
+     python3 modules/web_viewer/app.py --config config.ini --host 0.0.0.0 --port 8080
+     ```
 
-4. **Firewall (if using ufw):**
+4. **Check integration startup**
+   - Bot logs may show: `Web viewer integration failed: ...` or `Web viewer integration initialized`.
+   - If integration failed, the viewer subprocess is never started; fix the error shown (e.g. invalid `host` or `port` in config).
+
+5. **Firewall**
+   - Many SBC images (e.g. Orange Pi, Armbian minimal) do **not** ship with a firewall; if `curl` to localhost works and `host = 0.0.0.0`, the blocker may be network (Wi‑Fi client isolation, different subnet, or router). Check from a device on the same LAN using `http://<PI_IP>:8080`.
+   - If your system uses **ufw**:
+     ```bash
+     sudo ufw status
+     sudo ufw allow 8080/tcp
+     sudo ufw reload
+     ```
+   - If `ufw` is not installed (e.g. `sudo: ufw: command not found`), you may have no host firewall—that’s common on embedded images. To allow the port with **iptables** (often available when ufw is not):
+     ```bash
+     sudo iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+     ```
+     (Rules may not persist across reboots unless you use a persistence method for your distro.)
+   - If you prefer ufw, install it (e.g. `sudo apt install ufw`) and use the ufw commands above.
+
+6. **Test from the Pi first**
    ```bash
-   sudo ufw allow 5000/tcp && sudo ufw reload
+   curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/
    ```
+   If this returns `200`, the viewer is running and the issue is binding or firewall. If you use `host = 0.0.0.0`, then try from another device: `http://<PI_IP>:8080`.
 
-5. **Test locally first:**
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5000/
-   ```
+7. **Standalone run (no bot)**
+   - To rule out bot integration issues, start the viewer by itself (same config path so it finds the DB):
+     ```bash
+     python3 modules/web_viewer/app.py --config config.ini --host 0.0.0.0 --port 8080
+     ```
+   - If `restart_viewer.sh` is used, note it binds to `127.0.0.1` by default; for network access run the command above with `--host 0.0.0.0` or edit the script.
 
-### Flask / dependencies not found
-
+### Flask Not Found
 ```bash
-pip3 install flask flask-socketio bcrypt
+pip3 install flask flask-socketio
 ```
 
-### Port already in use
+### Database Not Found
+- Ensure the bot has been run at least once to create the databases
+- Check file permissions on database files
 
+### Port Already in Use
+- Change the port in `config.ini` or stop the conflicting service
+- Use `ss -tlnp | grep 8080` or `lsof -i :8080` (if available) to find what's using the port
+
+### Permission Denied
 ```bash
-ss -tlnp | grep 5000
-# or
-lsof -i :5000
+chmod +x restart_viewer.sh
 ```
 
-Change the port in `config.ini` or stop the conflicting process.
+## Security Notes
+
+- The web viewer is designed for local network use
+- Set `host = 127.0.0.1` for localhost-only access
+- Set `host = 0.0.0.0` for network access (use with caution)
+- No authentication is implemented - consider firewall rules for production use
+
+## Future Enhancements
+
+- Live packet streaming
+- Real-time message monitoring
+- Interactive contact management
+- Export functionality
+- Authentication system
+- Mobile-responsive design improvements

@@ -228,8 +228,7 @@ class PathCommand(BaseCommand):
     async def _send_one_byte_notice(self, message: MeshMessage):
         """Send a follow-up notice when the decoded path used 1-byte node IDs"""
         try:
-            name = message.sender_id or self.translate('commands.path.unknown_name')
-            notice = self.translate('commands.path.one_byte_notice', name=name)
+            notice = self.translate('commands.path.one_byte_notice')
             await asyncio.sleep(3.0)
             await self.send_response(message, notice, skip_user_rate_limit=True)
         except Exception as e:

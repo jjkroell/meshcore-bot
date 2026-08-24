@@ -864,6 +864,41 @@ class BaseCommand(ABC):
             path_string = path_string.split(" via ROUTE_TYPE_")[0]
         return path_string.strip() or "Unknown"
 
+    def clean_content(self, content: str) -> str:
+        import re
+        if not content:
+            return ""
+        content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
+        return ' '.join(content.split())
+
+    def cleanup_message_for_matching(self, message: MeshMessage) -> str:
+        content = self.clean_content(message.content).lower() if message.content else ""
+        message.content_lower = content
+        return content
+
+    async def enforce_path_byte_requirement(self, message: MeshMessage, section: str) -> bool:
+        if not self.bot.config.has_section(section):
+            return True
+        required = self.bot.config.getint(section, 'require_path_bytes_greater_or_equal_to', fallback=0)
+        if required <= 0:
+            return True
+        routing_info = getattr(message, 'routing_info', None)
+        if routing_info is not None:
+            path_bytes = routing_info.get('path_length', 0) or 0
+        else:
+            path = (getattr(message, 'path', '') or '').strip()
+            if not path or 'Direct' in path or '0 hops' in path:
+                path_bytes = 0
+            else:
+                tokens = [t.strip() for t in path.split(',') if t.strip()]
+                path_bytes = sum(len(t) // 2 for t in tokens) if tokens else 0
+        if path_bytes >= required:
+            return True
+        failure_msg = self.bot.config.get(section, 'require_path_bytes_failure_response', fallback='').strip()
+        if failure_msg:
+            await self.send_response(message, failure_msg)
+        return False
+
     def build_enhanced_connection_info(self, message: MeshMessage) -> str:
         """Build enhanced connection info with SNR, RSSI, and parsed route information.
         Uses message.routing_info when present (multi-byte path, direct) for path part.
@@ -871,7 +906,7 @@ class BaseCommand(ABC):
         path_part = self.get_path_display_string(message)
         snr_info = f"SNR: {message.snr or 'Unknown'} dB"
         rssi_info = f"RSSI: {message.rssi or 'Unknown'} dBm"
-        connection_info = f"{path_part} | {snr_info} | {rssi_info}"
+        connection_info = f"{path_part} \n {snr_info} \n {rssi_info}"
         return connection_info
     
     def format_timestamp(self, message: MeshMessage) -> str:

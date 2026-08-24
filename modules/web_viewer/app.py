@@ -1270,6 +1270,9 @@ class BotDataViewer:
                 return
             if session.get('authenticated'):
                 return
+            # Localhost-only admin endpoints skip session auth
+            if request.remote_addr in ('127.0.0.1', '::1') and request.path.startswith('/api/admin/'):
+                return
             if request.path.startswith('/api/'):
                 return make_response(jsonify({'error': 'Authentication required'}), 401)
             next_url = request.path
@@ -2192,6 +2195,37 @@ class BotDataViewer:
                 val = self.db_manager.get_metadata(k)
                 result[short] = val if val is not None else ''
             return jsonify(result)
+
+        @self.app.route('/api/admin/purge-old-contacts', methods=['POST'])
+        def api_admin_purge_old_contacts():
+            """Queue a purge of all contacts (repeaters + companions) older than N hours.
+
+            Localhost only — no session auth required.
+            Body: {"hours": <float>}  (default 24)
+            Returns: {"operation_id": <int>}  — poll /api/channel-operations/<id> for result.
+            """
+            if request.remote_addr not in ('127.0.0.1', '::1'):
+                return jsonify({'error': 'Forbidden'}), 403
+            data = request.get_json(silent=True) or {}
+            hours = data.get('hours', 24)
+            try:
+                hours = float(hours)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'hours must be a number'}), 400
+            if hours <= 0:
+                return jsonify({'error': 'hours must be positive'}), 400
+            import json as _json
+            with self.db_manager.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO channel_operations (operation_type, status, payload_data) VALUES ('purge_old_contacts', 'pending', ?)",
+                    (_json.dumps({'hours': hours}),)
+                )
+                conn.commit()
+                op_id = cursor.lastrowid
+            self.logger.info(f"Queued purge_old_contacts op {op_id} for contacts older than {hours}h")
+            return jsonify({'success': True, 'operation_id': op_id,
+                            'message': f'Purge queued for contacts older than {hours}h'})
 
         @self.app.route('/api-explorer')
         def api_explorer():
