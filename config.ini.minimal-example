@@ -493,6 +493,10 @@ enabled = false
 # Enable or disable the catfact command
 enabled = false
 
+[Dogfact_Command]
+# Enable or disable the dogfact command
+enabled = false
+
 [Hello_Command]
 # Enable or disable the hello command
 enabled = false

@@ -1335,6 +1335,10 @@ enabled = true
 enabled = true
 # channels =
 
+[Dogfact_Command]
+enabled = true
+# channels =
+
 [Aqi_Command]
 enabled = true
 # channels =
