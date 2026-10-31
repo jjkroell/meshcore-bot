@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 import pytz
 import re
-from ..models import MeshMessage
+from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
 from ..utils import format_elapsed_display, get_config_timezone
 
@@ -485,24 +485,27 @@ class BaseCommand(ABC):
             return False
     
     def get_max_message_length(self, message: MeshMessage) -> int:
-        """Calculate the maximum message length dynamically based on message type and bot username.
-        
-        Channel messages are formatted as "<username>: <message>", so:
-        max_length = 150 - username_length - 2 (for ": ")
-        
-        DM messages don't have a username prefix, so:
-        max_length = 150
-        
+        """Calculate the maximum message body size in UTF-8 bytes.
+
+        Channel messages go out as "<username>: <message>" and the firmware's
+        limit is 160 bytes, so the body budget is:
+        160 - utf8_byte_len(username) - 2 (for ": "), floored at 130.
+        A regional (non-global) flood scope takes another
+        CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD bytes.
+
+        Channel replies are also addressed "@[sender] ", which comes off the
+        budget too. DM messages have no username prefix; max safe payload is
+        158 bytes. Mirrors CommandManager.get_max_message_length.
+
         Args:
             message: The MeshMessage to calculate max length for.
-            
+
         Returns:
-            int: Maximum message length in characters.
+            int: Maximum message body length in UTF-8 bytes.
         """
-        # For DMs, no username prefix - full 150 characters available
         if message.is_dm:
-            return 150
-        
+            return 158
+
         # For channel messages, calculate based on bot username length
         # Try to get device username from meshcore first (actual radio username)
         username = None
@@ -519,18 +522,19 @@ class BaseCommand(ABC):
                         username = self_info.user_name
             except Exception as e:
                 self.logger.debug(f"Could not get username from meshcore.self_info: {e}")
-        
+
         # Fall back to bot_name from config if device username not available
         if not username:
             username = self.bot.config.get('Bot', 'bot_name', fallback='Bot')
-        
-        # Calculate max length: 150 - username_length - 2 (for ": ")
-        max_length = 150 - len(str(username)) - 2
-        
-        # Ensure we don't return a negative or unreasonably small value
-        # Minimum of 130 characters to ensure some functionality
-        return max(130, max_length)
-    
+
+        max_length = max(130, 160 - len(str(username).encode('utf-8')) - 2)
+        if not MeshMessage.is_global_flood_scope(message.effective_outgoing_flood_scope(self.bot)):
+            max_length -= CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
+        # Channel replies go out as "@[sender] <body>" (see send_channel_message)
+        if message.sender_id:
+            max_length -= len(f"@[{message.sender_id}] ".encode('utf-8'))
+        return max_length
+
     def check_cooldown(self, user_id: Optional[str] = None) -> Tuple[bool, float]:
         """Check if user is on cooldown.
         

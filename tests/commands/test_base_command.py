@@ -197,7 +197,7 @@ class TestGetMaxMessageLength:
         command_mock_bot.meshcore = None
         command_mock_bot.config.set("Bot", "bot_name", "LongBotName")
         cmd = _TestCommand(command_mock_bot)
-        msg = mock_message(content="x", channel="general", is_dm=False)
+        msg = mock_message(content="x", channel="general", is_dm=False, sender_id=None)
         assert cmd.get_max_message_length(msg) == 147  # 160 - 11 - 2
 
     def test_channel_prefers_meshcore_username_utf8_bytes(self, command_mock_bot):
@@ -206,7 +206,7 @@ class TestGetMaxMessageLength:
         command_mock_bot.meshcore = meshcore
         command_mock_bot.config.set("Bot", "bot_name", "fallback")
         cmd = _TestCommand(command_mock_bot)
-        msg = mock_message(content="x", channel="general", is_dm=False)
+        msg = mock_message(content="x", channel="general", is_dm=False, sender_id=None)
         assert cmd.get_max_message_length(msg) == 153  # 160 - 5 - 2
 
     def test_channel_unicode_username_uses_utf8_not_char_count(self, command_mock_bot):
@@ -215,22 +215,30 @@ class TestGetMaxMessageLength:
         meshcore.self_info = {"name": "😀😀😀😀"}
         command_mock_bot.meshcore = meshcore
         cmd = _TestCommand(command_mock_bot)
-        msg = mock_message(content="x", channel="general", is_dm=False)
+        msg = mock_message(content="x", channel="general", is_dm=False, sender_id=None)
         assert cmd.get_max_message_length(msg) == 142  # 160 - 16 - 2
 
     def test_channel_very_long_username_hits_130_byte_floor(self, command_mock_bot):
         command_mock_bot.meshcore = None
         command_mock_bot.config.set("Bot", "bot_name", "A" * 40)
         cmd = _TestCommand(command_mock_bot)
-        msg = mock_message(content="x", channel="general", is_dm=False)
+        msg = mock_message(content="x", channel="general", is_dm=False, sender_id=None)
         assert cmd.get_max_message_length(msg) == 130  # max(130, 160 - 40 - 2)
 
     def test_channel_regional_reply_scope_reduces_budget_by_10_bytes(self, command_mock_bot):
         command_mock_bot.meshcore = None
         command_mock_bot.config.set("Bot", "bot_name", "LongBotName")
         cmd = _TestCommand(command_mock_bot)
-        msg = mock_message(content="x", channel="general", is_dm=False, reply_scope="#west")
+        msg = mock_message(content="x", channel="general", is_dm=False, reply_scope="#west", sender_id=None)
         assert cmd.get_max_message_length(msg) == 147 - CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
+
+    def test_channel_reply_prefix_comes_off_budget(self, command_mock_bot):
+        """Channel replies go out as "@[sender] <body>"; that prefix is counted in bytes."""
+        command_mock_bot.meshcore = None
+        command_mock_bot.config.set("Bot", "bot_name", "LongBotName")
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(content="x", channel="general", is_dm=False, sender_id="Kim 😀")
+        assert cmd.get_max_message_length(msg) == 147 - len("@[Kim 😀] ".encode("utf-8"))
 
 
 class TestCanExecute:

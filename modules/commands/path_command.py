@@ -1650,8 +1650,7 @@ class PathCommand(BaseCommand):
                     
                     # Truncate name if too long
                     truncation = self.translate('commands.path.truncation')
-                    if len(name) > 20:
-                        name = name[:17] + truncation
+                    name = self._truncate_to_byte_length(name, 20, truncation)
                     
                     # Add confidence indicator
                     if confidence >= 0.9:
@@ -1669,24 +1668,35 @@ class PathCommand(BaseCommand):
                     
                     # Truncate name if too long
                     truncation = self.translate('commands.path.truncation')
-                    if len(name) > 27:
-                        name = name[:24] + truncation
+                    name = self._truncate_to_byte_length(name, 27, truncation)
                     
                     line = self.translate('commands.path.node_format', node_id=node_id, name=name)
             else:
                 # Unknown repeater
                 line = self.translate('commands.path.node_unknown', node_id=node_id)
             
-            # Ensure line fits within 130 character limit
-            if len(line) > 130:
-                truncation = self.translate('commands.path.truncation')
-                line = line[:127] + truncation
+            # Ensure line fits within 130 UTF-8 bytes (an emoji is up to 4)
+            line = self._truncate_to_byte_length(line, 130, self.translate('commands.path.truncation'))
             
             lines.append(line)
         
         # Return all lines - let _send_path_response handle the splitting
         return "\n".join(lines)
     
+    def _count_byte_length(self, text: str) -> int:
+        """Count UTF-8 byte length of text. This matches the RF packet byte limit."""
+        return len(text.encode('utf-8'))
+
+    def _truncate_to_byte_length(self, text: str, max_bytes: int, ellipsis: str = "...") -> str:
+        """Truncate text to fit within max UTF-8 byte length, never splitting multi-byte chars."""
+        text_bytes = text.encode('utf-8')
+        if len(text_bytes) <= max_bytes:
+            return text
+        available = max_bytes - len(ellipsis.encode('utf-8'))
+        if available <= 0:
+            return ellipsis
+        return text_bytes[:available].decode('utf-8', errors='ignore') + ellipsis
+
     async def _send_path_response(self, message: MeshMessage, response: str):
         """Send path response, splitting into multiple messages if necessary"""
         # Store the complete response for web viewer integration BEFORE splitting
@@ -1697,7 +1707,7 @@ class PathCommand(BaseCommand):
         # Get dynamic max message length based on message type and bot username
         max_length = self.get_max_message_length(message)
         
-        if len(response) <= max_length:
+        if self._count_byte_length(response) <= max_length:
             # Single message is fine
             await self.send_response(message, response)
         else:
@@ -1706,10 +1716,12 @@ class PathCommand(BaseCommand):
             lines = response.split('\n')
             current_message = ""
             message_count = 0
+            # Leave room for the "..." added to the end of each continued message
+            body_budget = max_length - self._count_byte_length(self.translate('commands.path.continuation_end'))
             
             for i, line in enumerate(lines):
-                # Check if adding this line would exceed max_length characters
-                if len(current_message) + len(line) + 1 > max_length:  # +1 for newline
+                # Check if adding this line would exceed max_length UTF-8 bytes
+                if self._count_byte_length(current_message) + self._count_byte_length(line) + 1 > body_budget:  # +1 for newline
                     # Send current message and start new one
                     if current_message:
                         # Add ellipsis on new line to end of continued message (if not the last message)

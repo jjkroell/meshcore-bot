@@ -599,7 +599,8 @@ class CommandManager:
         """Return max message body size in UTF-8 bytes (DM=158, channel per firmware budget).
 
         Regional (non-global) flood scope reduces the channel body budget by
-        ``CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD`` bytes.
+        ``CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD`` bytes, and the "@[sender] "
+        that channel replies are addressed with comes off it too.
 
         Mirrors ``BaseCommand.get_max_message_length`` but works on the manager level so it
         can be called outside of a specific command instance.
@@ -622,6 +623,9 @@ class CommandManager:
         max_length = max(130, 160 - len(str(username).encode('utf-8')) - 2)
         if not MeshMessage.is_global_flood_scope(message.effective_outgoing_flood_scope(self.bot)):
             max_length -= CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
+        # Channel replies go out as "@[sender] <body>" (see send_channel_message)
+        if message.sender_id:
+            max_length -= len(f"@[{message.sender_id}] ".encode('utf-8'))
         return max_length
 
     def check_keywords(self, message: MeshMessage) -> list[tuple]:

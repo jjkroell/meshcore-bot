@@ -282,3 +282,34 @@ def populated_mesh_graph(mesh_graph):
     ]
     populate_test_graph(mesh_graph, edges)
     return mesh_graph
+
+
+# Tests that came over from upstream in the 2026-08-24 production sync (ae890a7)
+# for features this fork's code doesn't have. Skipped, not deleted, so they
+# come back if those features are ever brought over from upstream.
+collect_ignore = [
+    "test_multitest_command.py",  # needs multitest path condensing (_condense_path_lines)
+    "test_repeater_manager.py",   # needs auto_manage_contacts = device mode
+]
+
+_UPSTREAM_ONLY = {
+    "tests/commands/test_base_command.py::TestCleanupMessageForMatching::":
+        "upstream's cleanup_message_for_matching(); this fork handles @-mentions in matches_keyword and the message handler",
+    "tests/test_command_manager.py::TestCommandAliases::": "upstream's alias normalising",
+    "tests/test_dadjoke_command.py::TestDadJokeMatchesKeyword::test_exclamation_prefix": "upstream's legacy ! prefix",
+    "tests/test_hacker_command.py::TestMatchesKeyword::test_with_exclamation_prefix": "upstream's legacy ! prefix",
+    "tests/test_joke_command.py::TestJokeMatchesKeyword::test_exclamation_prefix": "upstream's legacy ! prefix",
+    "tests/test_trace_command.py::TestMatchesKeyword::test_bang_prefix": "upstream's legacy ! prefix",
+    "tests/test_webviewer_command.py::TestMatchesKeyword::test_with_exclamation_prefix": "upstream's legacy ! prefix",
+    "tests/test_message_handler_contact_path.py::TestHandleNewContactAddContact::": "upstream's merged flood-advert contact path",
+    "tests/test_path_geo_toggle.py::": "upstream's [Path_Command] geographic_scoring_enabled",
+    "tests/unit/test_command_path_byte_gating.py::": "upstream's required path bytes for test/multitest",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        for prefix, reason in _UPSTREAM_ONLY.items():
+            if item.nodeid.startswith(prefix):
+                item.add_marker(pytest.mark.skip(reason=f"not in this fork: {reason}"))
+                break
