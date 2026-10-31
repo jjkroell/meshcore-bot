@@ -350,7 +350,7 @@ class MessageScheduler:
         try:
             _, msg_part = raw_value.split(':', 1)
             base_msg, _ = self._parse_count_suffix(msg_part.strip())
-            message = base_msg
+            message = decode_escape_sequences(base_msg)
         except ValueError:
             pass
         self.send_scheduled_message(channel, message)

@@ -81,6 +81,17 @@ class TestSchedulerCronKeys:
         assert job.func == scheduler.send_scheduled_message_counted
         assert job.args[1] == "Twice"
 
+    def test_counted_send_decodes_newlines(self, scheduler, tmp_path):
+        # A ::N message is re-read raw from config.ini at send time to count it
+        # down; \n must still become a new line, as it does for the others.
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[Scheduled_Messages]\n1300 = #sos:Line one \\n Line two::1\n")
+        scheduler.bot.config_file = str(cfg)
+        scheduler.send_scheduled_message = Mock()
+        scheduler._decrement_scheduled_count = Mock()
+        scheduler.send_scheduled_message_counted("#sos", "ignored", "1300", "msg_1300_#sos")
+        scheduler.send_scheduled_message.assert_called_once_with("#sos", "Line one \n Line two")
+
     def test_mixed_keys_no_warnings(self, scheduler):
         scheduler.bot.config.set("Scheduled_Messages", "0900", "general: Morning")
         scheduler.bot.config.set("Scheduled_Messages", "every_6h", "general: Ping")
