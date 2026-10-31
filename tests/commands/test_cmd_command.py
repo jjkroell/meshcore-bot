@@ -42,6 +42,18 @@ class TestCmdCommand:
         assert "ping" in response or "help" in response or "cmd" in response
 
     @pytest.mark.asyncio
+    async def test_channel_reply_puts_list_on_line_after_mention(self, command_mock_bot):
+        command_mock_bot.config.add_section("Cmd_Command")
+        command_mock_bot.config.set("Cmd_Command", "enabled", "true")
+        command_mock_bot.command_manager.keywords = {}
+        command_mock_bot.command_manager.commands = {"ping": type("MockCmd", (), {"keywords": ["ping"]})()}
+        cmd = CmdCommand(command_mock_bot)
+        msg = mock_message(content="cmd", is_dm=False, sender_id="Kim")
+        assert await cmd.execute(msg) is True
+        response = command_mock_bot.command_manager.send_response.call_args[0][1]
+        assert response.startswith("@[Kim]\nAvail cmds: ")
+
+    @pytest.mark.asyncio
     async def test_execute_returns_reference_url_when_configured(self, command_mock_bot):
         command_mock_bot.config.add_section("Cmd_Command")
         command_mock_bot.config.set("Cmd_Command", "enabled", "true")

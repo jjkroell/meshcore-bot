@@ -190,6 +190,10 @@ class CmdCommand(BaseCommand):
             max_length = self.get_max_message_length(message)
             # _get_commands_list handles the prefix internally; pass message for context filtering
             response = self._get_commands_list(message=message, max_length=max_length)
+            if not message.is_dm and message.sender_id:
+                # Address it ourselves with the list on its own line; same bytes as
+                # the "@[name] " send_channel_message would otherwise add.
+                response = f"@[{message.sender_id}]\n{response}"
             return await self.send_response(message, response)
         except Exception as e:
             self.logger.error(f"Error executing cmd command: {e}")
