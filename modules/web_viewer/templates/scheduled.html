@@ -44,7 +44,8 @@
   <div class="mt-2 text-muted" style="font-size:0.8rem;">
     <i class="fas fa-info-circle me-1"></i>
     <strong>Fixed time:</strong> HHMM (24h) — fires daily at that time.&nbsp;
-    <strong>Interval:</strong> <code>every_30h</code>, <code>every_6h30m</code> — fires every N hours/minutes, rotating through the day.
+    <strong>Interval:</strong> <code>every_30h</code>, <code>every_6h30m</code> — fires every N hours/minutes, rotating through the day.&nbsp;
+    <strong>Monthly / cron:</strong> a day of the month, or any cron schedule such as <code>0 8 * * mon</code>.
     Changes take effect immediately without a restart.
   </div>
 
@@ -87,6 +88,10 @@
               <input class="form-check-input" type="radio" name="msg-type" id="type-interval" value="interval">
               <label class="form-check-label" for="type-interval">Interval (rotating)</label>
             </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="msg-type" id="type-cron" value="cron">
+              <label class="form-check-label" for="type-cron">Monthly / cron</label>
+            </div>
           </div>
         </div>
 
@@ -115,6 +120,26 @@
             <span>m</span>
           </div>
           <div class="form-text">e.g. 30h 0m = every 30 hours (rotates through the day).</div>
+        </div>
+
+        <!-- Monthly / cron inputs -->
+        <div id="cron-inputs" class="mb-3 d-none">
+          <label class="form-label">Day of month and time (24h)</label>
+          <div class="d-flex gap-2 align-items-center">
+            <input type="number" class="form-control" id="cron-day" min="1" max="31"
+                   placeholder="Day" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            <span>at</span>
+            <input type="number" class="form-control" id="cron-hour" min="0" max="23"
+                   placeholder="HH" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+            <span>:</span>
+            <input type="number" class="form-control" id="cron-minute" min="0" max="59"
+                   placeholder="MM" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+          </div>
+          <div class="form-text">e.g. 1 at 9:00 = 9:00 AM on the 1st of every month. Days 29–31 skip months that don't have them.</div>
+          <label class="form-label mt-2" for="cron-expr">Or a cron schedule <span class="text-muted small">(minute hour day month weekday)</span></label>
+          <input type="text" class="form-control font-monospace" id="cron-expr" maxlength="100"
+                 placeholder="e.g. 0 8 * * mon" style="background-color:var(--bg-secondary);color:var(--text-color);border-color:var(--border-color);">
+          <div class="form-text">Overrides the fields above when filled. <code>@daily</code>, <code>@weekly</code>, <code>@monthly</code> also work. Use day names (mon–sun): weekday numbers start at 0 = Monday.</div>
         </div>
 
         <div class="mb-3">
@@ -193,6 +218,18 @@ details[open] .ch-arrow { transform: rotate(90deg); }
   let messages = [];
   let editingKey = null;
   let deletingKey = null;
+  const TYPE_BADGE = {fixed: 'bg-primary', interval: 'bg-success', cron: 'bg-info text-dark'};
+  const TYPE_NAME  = {fixed: 'Fixed', interval: 'Interval', cron: 'Cron'};
+
+  function showTypeInputs(type) {
+    document.getElementById('fixed-inputs').classList.toggle('d-none', type !== 'fixed');
+    document.getElementById('interval-inputs').classList.toggle('d-none', type !== 'interval');
+    document.getElementById('cron-inputs').classList.toggle('d-none', type !== 'cron');
+  }
+  function clearTypeInputs() {
+    ['fixed-hour','fixed-minute','interval-hours','interval-minutes',
+     'cron-day','cron-hour','cron-minute','cron-expr'].forEach(id => document.getElementById(id).value = '');
+  }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function escHtml(s) {
@@ -238,10 +275,12 @@ details[open] .ch-arrow { transform: rotate(90deg); }
     tbody.innerHTML = messages.map(m => `
       <tr>
         <td style="border-color:var(--border-color);">
-          <span class="badge ${m.type==='fixed'?'bg-primary':'bg-success'} me-1">
-            ${m.type==='fixed'?'Fixed':'Interval'}
+          <span class="badge ${TYPE_BADGE[m.type]||'bg-secondary'} me-1">
+            ${TYPE_NAME[m.type]||m.type}
           </span>
           ${escHtml(m.label)}
+          ${m.label !== m.spec && m.spec ? `<div class="text-muted small font-monospace">${escHtml(m.spec)}</div>` : ''}
+          ${m.next ? `<div class="text-muted small">Next: ${escHtml(m.next)}</div>` : ''}
         </td>
         <td style="border-color:var(--border-color);">${m.channels.map(c => `<code>${escHtml(c)}</code>`).join(' ')}</td>
         <td style="border-color:var(--border-color);">${escHtml(m.message)}</td>
@@ -261,11 +300,7 @@ details[open] .ch-arrow { transform: rotate(90deg); }
 
   // ── Type toggle ───────────────────────────────────────────────────────────
   document.querySelectorAll('input[name="msg-type"]').forEach(r => {
-    r.addEventListener('change', () => {
-      const isFixed = document.getElementById('type-fixed').checked;
-      document.getElementById('fixed-inputs').classList.toggle('d-none', !isFixed);
-      document.getElementById('interval-inputs').classList.toggle('d-none', isFixed);
-    });
+    r.addEventListener('change', () => showTypeInputs(r.value));
   });
 
   document.getElementById('modal-message').addEventListener('input', function() {
@@ -279,12 +314,8 @@ details[open] .ch-arrow { transform: rotate(90deg); }
     if (editingKey !== null) return;
     document.getElementById('modal-title').textContent = 'Add Scheduled Message';
     document.getElementById('type-fixed').checked = true;
-    document.getElementById('fixed-inputs').classList.remove('d-none');
-    document.getElementById('interval-inputs').classList.add('d-none');
-    document.getElementById('fixed-hour').value = '';
-    document.getElementById('fixed-minute').value = '';
-    document.getElementById('interval-hours').value = '';
-    document.getElementById('interval-minutes').value = '';
+    showTypeInputs('fixed');
+    clearTypeInputs();
     Array.from(document.getElementById('modal-channel').options).forEach(o => o.selected = false);
     document.getElementById('modal-message').value = '';
     document.getElementById('modal-char-count').textContent = '0';
@@ -312,24 +343,27 @@ details[open] .ch-arrow { transform: rotate(90deg); }
     document.getElementById('modal-title').textContent = 'Edit Scheduled Message';
     clearModalAlert();
 
+    clearTypeInputs();
+    document.getElementById('type-' + m.type).checked = true;
+    showTypeInputs(m.type);
     if (m.type === 'fixed') {
-      document.getElementById('type-fixed').checked = true;
-      document.getElementById('fixed-inputs').classList.remove('d-none');
-      document.getElementById('interval-inputs').classList.add('d-none');
       document.getElementById('fixed-hour').value = parseInt(key.slice(0,2), 10);
       document.getElementById('fixed-minute').value = parseInt(key.slice(2,4), 10);
-      document.getElementById('interval-hours').value = '';
-      document.getElementById('interval-minutes').value = '';
-    } else {
-      document.getElementById('type-interval').checked = true;
-      document.getElementById('fixed-inputs').classList.add('d-none');
-      document.getElementById('interval-inputs').classList.remove('d-none');
+    } else if (m.type === 'interval') {
       const hMatch = key.match(/(\d+)h/);
       const mMatch = key.match(/(\d+)m/);
       document.getElementById('interval-hours').value   = hMatch ? hMatch[1] : '';
       document.getElementById('interval-minutes').value = mMatch ? mMatch[1] : '';
-      document.getElementById('fixed-hour').value = '';
-      document.getElementById('fixed-minute').value = '';
+    } else {
+      // "M H D * *" fills the day/time fields; anything else goes in the cron box.
+      const simple = key.match(/^(\d+) (\d+) (\d+) \* \*$/);
+      if (simple) {
+        document.getElementById('cron-minute').value = simple[1];
+        document.getElementById('cron-hour').value   = simple[2];
+        document.getElementById('cron-day').value    = simple[3];
+      } else {
+        document.getElementById('cron-expr').value = key;
+      }
     }
 
     const chList = m.channel.split(',').map(c => c.trim());
@@ -348,13 +382,13 @@ details[open] .ch-arrow { transform: rotate(90deg); }
   // ── Save ──────────────────────────────────────────────────────────────────
   document.getElementById('modal-save-btn').addEventListener('click', async function() {
     clearModalAlert();
-    const isFixed = document.getElementById('type-fixed').checked;
+    const type    = document.querySelector('input[name="msg-type"]:checked').value;
     const channel = Array.from(document.getElementById('modal-channel').selectedOptions).map(o => o.value).join(',');
     const message = document.getElementById('modal-message').value.trim();
     const btn     = this;
 
     let key;
-    if (isFixed) {
+    if (type === 'fixed') {
       const hh = document.getElementById('fixed-hour').value;
       const mm = document.getElementById('fixed-minute').value;
       if (hh === '' || mm === '') { modalAlert('Please enter a time (HH and MM).'); return; }
@@ -362,11 +396,29 @@ details[open] .ch-arrow { transform: rotate(90deg); }
       if (isNaN(h) || h < 0 || h > 23) { modalAlert('Hour must be 0–23.'); return; }
       if (isNaN(m) || m < 0 || m > 59) { modalAlert('Minute must be 0–59.'); return; }
       key = String(h).padStart(2,'0') + String(m).padStart(2,'0');
-    } else {
+    } else if (type === 'interval') {
       const h = parseInt(document.getElementById('interval-hours').value)   || 0;
       const m = parseInt(document.getElementById('interval-minutes').value) || 0;
       if (h === 0 && m === 0) { modalAlert('Interval must be greater than zero.'); return; }
       key = 'every_' + (h ? h + 'h' : '') + (m ? m + 'm' : '');
+    } else {
+      const expr = document.getElementById('cron-expr').value.trim().replace(/\s+/g, ' ');
+      if (expr) {
+        if (!expr.startsWith('@') && expr.split(' ').length !== 5) {
+          modalAlert('A cron schedule has 5 fields: minute hour day month weekday.'); return;
+        }
+        key = expr;  // the server checks it properly
+      } else {
+        const dd = document.getElementById('cron-day').value;
+        const hh = document.getElementById('cron-hour').value;
+        const mm = document.getElementById('cron-minute').value;
+        if (dd === '' || hh === '' || mm === '') { modalAlert('Please enter a day and time, or a cron schedule.'); return; }
+        const d = parseInt(dd), h = parseInt(hh), m = parseInt(mm);
+        if (isNaN(d) || d < 1 || d > 31) { modalAlert('Day must be 1–31.'); return; }
+        if (isNaN(h) || h < 0 || h > 23) { modalAlert('Hour must be 0–23.'); return; }
+        if (isNaN(m) || m < 0 || m > 59) { modalAlert('Minute must be 0–59.'); return; }
+        key = `${m} ${h} ${d} * *`;
+      }
     }
 
     if (!channel) { modalAlert('Please select at least one channel.'); return; }

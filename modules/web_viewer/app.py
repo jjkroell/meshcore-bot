@@ -94,8 +94,9 @@ def _strip_ansi_codes(text: str) -> str:
 from modules.config_snapshot import config_to_redacted_sections
 from modules.feed_manager import FeedManager
 from modules.repeater_manager import RepeaterManager
+from modules.scheduled_message_cron import cron_spec, cron_trigger, describe_cron, normalize_cron_key
 from modules.url_shortener import _coerce_url_string
-from modules.utils import calculate_distance, resolve_path
+from modules.utils import calculate_distance, get_config_timezone, resolve_path
 from modules.web_viewer.config_panels import CONFIG_PANELS, PANEL_CATEGORIES
 from modules.web_viewer.integration import normalized_web_viewer_password
 
@@ -2268,6 +2269,15 @@ class BotDataViewer:
                     elif re.fullmatch(r'every_(\d+h)?(\d+m)?', key) and key != 'every_':
                         msg_type = 'interval'
                         label = key.replace('every_', 'Every ').replace('h', 'h ').replace('m', 'm').strip()
+                    elif cron_spec(key) is not None:
+                        msg_type = 'cron'
+                        label = describe_cron(key)
+                        try:
+                            tz, _ = get_config_timezone(fresh, self.logger)
+                            nxt = cron_trigger(key, tz).get_next_fire_time(None, datetime.now(tz))
+                            next_run = nxt.strftime('%Y-%m-%d %H:%M') if nxt else None
+                        except Exception:
+                            next_run = None
                     else:
                         continue
                     ch_raw = channel.strip()
@@ -2280,9 +2290,13 @@ class BotDataViewer:
                         msg_raw = msg_raw[:_cm.start()].rstrip()
                     else:
                         count = None
-                    messages.append({'key': key, 'type': msg_type, 'label': label,
-                                     'channel': ch_raw, 'channels': ch_list,
-                                     'message': msg_raw, 'count': count})
+                    entry = {'key': key, 'type': msg_type, 'label': label,
+                             'channel': ch_raw, 'channels': ch_list,
+                             'message': msg_raw, 'count': count}
+                    if msg_type == 'cron':
+                        entry['spec'] = cron_spec(key)
+                        entry['next'] = next_run
+                    messages.append(entry)
             return jsonify({'messages': messages})
 
         @self.app.route('/api/scheduled-messages', methods=['POST'])
@@ -6324,10 +6338,11 @@ class BotDataViewer:
 
         def valid_key(k):
             return (re.fullmatch(r'[0-2][0-9][0-5][0-9]', k) or
-                    (re.fullmatch(r'every_(\d+h)?(\d+m)?', k) and k != 'every_'))
+                    (re.fullmatch(r'every_(\d+h)?(\d+m)?', k) and k != 'every_') or
+                    cron_spec(k) is not None)
 
-        key      = str(data.get('key', '')).strip().lower()
-        orig_key = str(data.get('original_key', '')).strip().lower()
+        key      = normalize_cron_key(str(data.get('key', '')))
+        orig_key = normalize_cron_key(str(data.get('original_key', '')))
         channel  = str(data.get('channel', '')).strip()
         message  = str(data.get('message', '')).strip()
         try:
@@ -6338,7 +6353,7 @@ class BotDataViewer:
 
         if action in ('create', 'update'):
             if not valid_key(key):
-                return _jsonify({'error': f"Invalid key '{key}'. Use HHMM or every_Xh / every_XhYm."}), 400
+                return _jsonify({'error': f"Invalid key '{key}'. Use HHMM, every_Xh / every_XhYm, or a cron schedule (e.g. 0 9 1 * *)."}), 400
             if not channel or not message:
                 return _jsonify({'error': 'channel and message are required'}), 400
             for _val, _name in [(channel, 'channel'), (message, 'message')]:
@@ -6378,7 +6393,7 @@ class BotDataViewer:
             if '=' in stripped:
                 in_entries = True
                 k, v = stripped.split('=', 1)
-                k = k.strip().lower()
+                k = normalize_cron_key(k)
                 v = v.strip()
                 try:
                     ch, msg = v.split(':', 1)

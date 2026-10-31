@@ -21,6 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from meshcore.events import EventType
 
 from .maintenance import MaintenanceRunner
+from .scheduled_message_cron import cron_spec, cron_trigger
 from .security_utils import validate_external_url
 from .utils import decode_escape_sequences, format_keyword_response_with_placeholders, get_config_timezone
 
@@ -79,7 +80,8 @@ class MessageScheduler:
                 try:
                     # Validate time format first
                     if not self._is_valid_time_format(time_str):
-                        self.logger.warning(f"Invalid time format '{time_str}' for scheduled message: {message_info}")
+                        if not self._is_valid_interval_key(time_str) and cron_spec(time_str) is None:
+                            self.logger.warning(f"Invalid time format '{time_str}' for scheduled message: {message_info}")
                         continue
 
                     channel, raw_msg = message_info.split(':', 1)
@@ -157,6 +159,44 @@ class MessageScheduler:
                     self.logger.warning(f"Invalid interval message format: {message_info}")
                 except Exception as e:
                     self.logger.warning(f"Error setting up interval message '{key}': {e}")
+
+            # Cron messages (5-field crontab or @preset, e.g. "0 9 1 * *" = 09:00 on the 1st)
+            for key, message_info in self.bot.config.items('Scheduled_Messages'):
+                if self._is_valid_time_format(key):
+                    continue
+                if cron_spec(key) is None:
+                    continue
+                try:
+                    channel, raw_msg = message_info.split(':', 1)
+                    channel = channel.strip()
+                    raw_msg = raw_msg.strip()
+                    raw_msg_clean, count = self._parse_count_suffix(raw_msg)
+                    message = decode_escape_sequences(raw_msg_clean)
+                    job_id = f"cron_{key}_{channel}"
+
+                    if count is not None:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message_counted,
+                            cron_trigger(key, tz),
+                            args=[channel, message, key, job_id],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Cron message '{key}' -> {channel}: {message} [{count} remaining]")
+                    else:
+                        self._apscheduler.add_job(
+                            self.send_scheduled_message,
+                            cron_trigger(key, tz),
+                            args=[channel, message],
+                            id=job_id,
+                            replace_existing=True,
+                        )
+                        self.logger.info(f"Cron message '{key}' -> {channel}: {message}")
+                    self.scheduled_messages[key] = (channel, message)
+                except ValueError:
+                    self.logger.warning(f"Invalid cron message format: {message_info}")
+                except Exception as e:
+                    self.logger.warning(f"Error setting up cron message '{key}': {e}")
 
         self._apscheduler.start()
         self.logger.info(f"APScheduler started with {len(self.scheduled_messages)} scheduled message(s)")
