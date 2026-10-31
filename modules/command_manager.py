@@ -5,7 +5,9 @@ Handles all bot commands, keyword matching, and response generation
 """
 
 import asyncio
+import functools
 import random
+import re
 import time
 from dataclasses import dataclass
 from hashlib import sha256
@@ -24,6 +26,19 @@ from .models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from .plugin_loader import PluginLoader
 from .security_utils import sanitize_name, validate_safe_path
 from .utils import check_internet_connectivity_async, decode_escape_sequences, format_keyword_response_with_placeholders
+
+
+@functools.lru_cache(maxsize=256)
+def _ban_pattern(entry: str) -> re.Pattern[str]:
+    """Compile a wildcard ban entry; every character but ``*`` is literal."""
+    body = '.*'.join(re.escape(part) for part in entry.split('*'))
+    return re.compile(body, re.IGNORECASE | re.DOTALL)
+
+
+def _ban_matches(entry: str, sender_id: str) -> bool:
+    if '*' in entry:
+        return _ban_pattern(entry).fullmatch(sender_id) is not None
+    return sender_id.startswith(entry)
 
 
 @dataclass
@@ -498,13 +513,19 @@ class CommandManager:
         return [user.strip() for user in banned.split(',') if user.strip()]
 
     def is_user_banned(self, sender_id: str | None) -> bool:
-        """Check if sender is banned using prefix (starts-with) matching.
+        """Check if sender is banned.
 
-        A banned entry "Awful Username" matches "Awful Username" and "Awful Username 🍆".
+        A plain entry is a prefix (starts-with) match: "Awful Username" matches
+        "Awful Username" and "Awful Username 🍆".
+
+        An entry containing ``*`` must match the whole name, with ``*`` standing
+        for any run of characters (including none), case-insensitively:
+        "*spam*" matches "SPAMbot" and "My Spam Node"; "Troll*Node" matches
+        "troll 7 node".
         """
         if not sender_id:
             return False
-        return any(sender_id.startswith(entry) for entry in self.banned_users)
+        return any(_ban_matches(entry, sender_id) for entry in self.banned_users)
 
     def load_monitor_channels(self) -> list[str]:
         """Load monitored channels from config.

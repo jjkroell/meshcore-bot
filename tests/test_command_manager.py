@@ -126,6 +126,39 @@ class TestIsUserBanned:
         manager = make_manager(cm_bot)
         assert manager.is_user_banned(None) is False
 
+    def _ban(self, cm_bot, entries):
+        cm_bot.config.add_section("Banned_Users")
+        cm_bot.config.set("Banned_Users", "banned_users", entries)
+        return make_manager(cm_bot)
+
+    def test_wildcard_contains(self, cm_bot):
+        manager = self._ban(cm_bot, "*spam*")
+        assert manager.is_user_banned("SPAMbot") is True
+        assert manager.is_user_banned("My Spam Node 🍆") is True
+        assert manager.is_user_banned("Spa mbot") is False
+
+    def test_wildcard_middle_must_match_whole_name(self, cm_bot):
+        manager = self._ban(cm_bot, "Troll*Node")
+        assert manager.is_user_banned("troll 7 node") is True
+        assert manager.is_user_banned("TrollNode") is True
+        assert manager.is_user_banned("Troll 7 Node 2") is False
+
+    def test_wildcard_suffix(self, cm_bot):
+        manager = self._ban(cm_bot, "*-bot")
+        assert manager.is_user_banned("weather-BOT") is True
+        assert manager.is_user_banned("weather-bot2") is False
+
+    def test_wildcard_other_characters_literal(self, cm_bot):
+        manager = self._ban(cm_bot, "a.b?[x]*")
+        assert manager.is_user_banned("a.b?[x] node") is True
+        assert manager.is_user_banned("axb?[x] node") is False
+
+    def test_plain_entry_still_prefix_and_case_sensitive(self, cm_bot):
+        manager = self._ban(cm_bot, "BadUser, *troll*")
+        assert manager.is_user_banned("BadUser 123") is True
+        assert manager.is_user_banned("baduser") is False
+        assert manager.is_user_banned("Mr TROLL") is True
+
 
 class TestChannelTriggerAllowed:
     """Tests for _is_channel_trigger_allowed."""

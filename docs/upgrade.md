@@ -13,7 +13,7 @@ Previous config files continue to work. The following legacy config formats are 
 
 ### Banned Users: Prefix Matching
 
-`[Banned_Users]` uses **prefix (starts-with) matching** for `banned_users` entries. A banned entry `"Awful Username"` matches both `"Awful Username"` and `"Awful Username 🍆"`. If you rely on exact matching, ensure your banned entries are specific enough.
+`[Banned_Users]` uses **prefix (starts-with) matching** for `banned_users` entries. A banned entry `"Awful Username"` matches both `"Awful Username"` and `"Awful Username 🍆"`. If you rely on exact matching, ensure your banned entries are specific enough. An entry containing `*` is a wildcard instead: it must match the whole name, `*` stands for any characters, and case is ignored (`"*spam*"` bans any name containing "spam").
 
 ### New Optional Sections
 

@@ -781,6 +781,8 @@ respond_to_dms = true
 [Banned_Users]
 # List of banned sender names (comma-separated). Matching is prefix (starts-with):
 # "Awful Username" also matches "Awful Username 🍆". No bot responses in channels or DMs.
+# An entry containing * must match the whole name, * meaning any characters, ignoring case:
+# "*spam*" bans any name containing "spam"; "Troll*Node" bans "troll 7 node".
 banned_users =
 
 [Feed_Manager]
