@@ -12,7 +12,9 @@ The same rule Ridgeline uses for its #sos alerts (keep them in step): **sos,
 emergency, mayday, 911, threat, life** as whole words, or **need help / needs
 help / help me**, anywhere in the message and in any case. `#sos` on its own
 (the channel's name), "wildlife", "lifeline", "threats", "thanks for the help"
-and "test" don't count.
+and "test" don't count. Neither does a reply: a message that **starts with an
+@-mention** ("@[Dave] what's your emergency?") is part of a conversation, not
+a new call, so it gets no auto reply and raises no Ridgeline alert.
 
 ## Safety rules
 

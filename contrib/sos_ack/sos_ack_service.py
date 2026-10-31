@@ -7,7 +7,8 @@ words, reply on #sos so they know their call was heard by the bot.
 The trigger is the same as Ridgeline's (internal/store/sos.go sosAlertRe and
 web/src/lib/sos.svelte.ts ALERT_RE): sos, emergency, mayday, 911, threat or
 life as a whole word ("#sos", the channel's own tag, doesn't count), or
-"need help" / "needs help" / "help me". Keep the three in step.
+"need help" / "needs help" / "help me". A message that opens with an
+@-mention is a reply, not a new call, and gets no reply. Keep the three in step.
 
 This listens to the radio's channel messages directly, like the Discord bridge
 does, so it works without #sos in [Channels] monitor_channels. Leave #sos OUT
@@ -42,6 +43,10 @@ ALERT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A message opening with an @-mention ("@[Dave] on my way") is a reply in a
+# conversation, not a new call for help (Ridgeline's sosReplyRe / REPLY_RE).
+REPLY_RE = re.compile(r"^\s*@\[")
+
 DEFAULT_REPLY = "@[{sender}] *auto reply*  An email was sent to users who have it enabled in Ridgeline."
 
 # The bot's limit for a channel message, "<bot name>: " included.
@@ -51,9 +56,15 @@ MAX_CHANNEL_BYTES = 150
 PLAUSIBLE_CLOCK = 1_700_000_000  # Nov 2023
 
 
-def is_alert(text: str) -> bool:
-    """Whether a #sos message carries an emergency word (Ridgeline's rule)."""
+def has_alert_word(text: str) -> bool:
+    """Whether text contains an emergency word at all."""
     return bool(ALERT_RE.search(text))
+
+
+def is_alert(text: str) -> bool:
+    """Whether a #sos message is a call for help (Ridgeline's rule): an
+    emergency word, and not a reply opening with an @-mention."""
+    return has_alert_word(text) and not REPLY_RE.match(text)
 
 
 def split_sender(text: str) -> tuple[str, str]:
@@ -88,7 +99,7 @@ class SosAckService(BaseServicePlugin):
         # Some bot versions call start() twice; subscribe only once.
         if not self.enabled or self._running:
             return
-        if is_alert(self._render("Tester", None)):
+        if has_alert_word(self._render("Tester", None)):
             # The reply would itself look like an emergency to Ridgeline (and to
             # this service), alerting every monitor. Refuse to run with it.
             self.logger.error("SosAck: the reply template contains an emergency word; not starting")
@@ -142,7 +153,7 @@ class SosAckService(BaseServicePlugin):
             hops_text = f" ({hops} hop{'s' if hops != 1 else ''})"
         fields = dict(bot=bot_name, hops=hops if hops is not None else "?", hops_text=hops_text)
         text = self.reply.format(sender=sender, **fields) if sender else ""
-        if not sender or is_alert(text):
+        if not sender or has_alert_word(text):
             # No name, or one like "SOS Dave" that would make the reply an
             # alert: leave the mention out rather than raise a false one.
             text = self.reply.replace("@[{sender}] ", "").replace("{sender}", "").format(sender="", **fields)
