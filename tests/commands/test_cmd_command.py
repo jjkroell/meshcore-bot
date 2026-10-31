@@ -89,13 +89,13 @@ class TestCmdCommand:
             commands[name] = mock_cmd
         command_mock_bot.command_manager.commands = commands
         cmd = CmdCommand(command_mock_bot)
-        # "Available commands: " = 20 chars; "longcommandnameNN" = 17 chars; ", " = 2 chars
-        # 3 commands fit in 75 chars; suffix " (22 more)" = 11 chars; total = 86
-        # max_length=90 allows 3 commands + suffix, but not a 4th command
-        result = cmd._get_commands_list(max_length=90)
+        # "Avail cmds: " = 12 chars; "longcommandnameNN" = 17 chars; ", " = 2 chars
+        # 3 commands fit in 67 chars; suffix " (22 more)" = 11 chars; total = 78
+        # max_length=82 allows 3 commands + suffix, but not a 4th command (86)
+        result = cmd._get_commands_list(max_length=82)
         # Should contain truncation indicator
         assert "more)" in result
         # Should start with prefix
-        assert result.startswith("Available commands: ")
+        assert result.startswith("Avail cmds: ")
         # Should NOT contain doubled numbers like "(5 5 more)"
         assert not re.search(r'\(\d+ \d+ more\)', result)

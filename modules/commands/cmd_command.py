@@ -139,7 +139,7 @@ class CmdCommand(BaseCommand):
 
         # Build list within length limit
         result: list[str] = []
-        prefix = "Available commands: "
+        prefix = "Avail cmds: "
         current_length = len(prefix)
 
         for cmd in command_names:
