@@ -1706,10 +1706,14 @@ class PathCommand(BaseCommand):
         
         # Get dynamic max message length based on message type and bot username
         max_length = self.get_max_message_length(message)
-        
+
+        # On a channel, address the first message ourselves with the path on the
+        # next line; same bytes as the "@[name] " send_channel_message would add.
+        lead = f"@[{message.sender_id}]\n" if not message.is_dm and message.sender_id else ""
+
         if self._count_byte_length(response) <= max_length:
             # Single message is fine
-            await self.send_response(message, response)
+            await self.send_response(message, lead + response)
         else:
             # Split into multiple messages for over-the-air transmission
             # But keep the full response in last_response for web viewer
@@ -1729,7 +1733,7 @@ class PathCommand(BaseCommand):
                             current_message += self.translate('commands.path.continuation_end')
                         # Per-user rate limit applies only to first message (trigger); skip for continuations
                         await self.send_response(
-                            message, current_message.rstrip(),
+                            message, (lead if message_count == 0 else "") + current_message.rstrip(),
                             skip_user_rate_limit=(message_count > 0)
                         )
                         await asyncio.sleep(3.0)  # Delay between messages (same as other commands)
@@ -1749,7 +1753,9 @@ class PathCommand(BaseCommand):
             
             # Send the last message if there's content (continuation; skip per-user rate limit)
             if current_message:
-                await self.send_response(message, current_message, skip_user_rate_limit=True)
+                await self.send_response(
+                    message, (lead if message_count == 0 else "") + current_message, skip_user_rate_limit=True
+                )
     
     async def _extract_path_from_recent_messages(self) -> str:
         """Extract path from the current message's path information (same as test command).

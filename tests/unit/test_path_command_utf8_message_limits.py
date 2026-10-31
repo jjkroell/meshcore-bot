@@ -96,6 +96,34 @@ class TestPathCommandSendPathResponseByteSplitting:
         path_cmd.send_response.assert_awaited_once()
 
 
+    @pytest.mark.asyncio
+    async def test_channel_reply_puts_path_on_line_after_mention(self, path_cmd):
+        """Channel: first message is "@[sender]\n<path>"; continuations aren't re-addressed here."""
+        path_cmd.get_max_message_length = lambda _msg: 100
+        msg = MeshMessage(content="p", channel="general", is_dm=False, sender_id="Kim")
+        with patch("modules.commands.path_command.asyncio.sleep", new_callable=AsyncMock):
+            await path_cmd._send_path_response(msg, "56E6C2: Yaletown Repeater")
+        assert path_cmd.send_response.await_args[0][1] == "@[Kim]\n56E6C2: Yaletown Repeater"
+
+    @pytest.mark.asyncio
+    async def test_split_reply_addresses_only_first_message(self, path_cmd):
+        path_cmd.get_max_message_length = lambda _msg: 25
+        msg = MeshMessage(content="p", channel="general", is_dm=False, sender_id="Kim")
+        with patch("modules.commands.path_command.asyncio.sleep", new_callable=AsyncMock):
+            await path_cmd._send_path_response(msg, "a" * 12 + "\n" + "b" * 13)
+        sent = [c[0][1] for c in path_cmd.send_response.await_args_list]
+        assert sent[0].startswith("@[Kim]\naaaa")
+        assert all(not m.startswith("@[Kim]") for m in sent[1:])
+
+    @pytest.mark.asyncio
+    async def test_dm_reply_has_no_mention(self, path_cmd):
+        path_cmd.get_max_message_length = lambda _msg: 100
+        msg = MeshMessage(content="p", is_dm=True, sender_id="Kim")
+        with patch("modules.commands.path_command.asyncio.sleep", new_callable=AsyncMock):
+            await path_cmd._send_path_response(msg, "short")
+        assert path_cmd.send_response.await_args[0][1] == "short"
+
+
 class MockTranslateForSend:
     def __call__(self, key: str, **kwargs):
         if key == "commands.path.continuation_end":
