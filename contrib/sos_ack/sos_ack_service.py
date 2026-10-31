@@ -21,7 +21,7 @@ Config (local/config.ini):
     [SosAck]
     enabled = true
     channel = #sos              (or a list: #sos, #sos-test)
-    reply = @[{sender}] *auto reply*  An email was sent to users who have it enabled in Ridgeline.
+    reply = @[{sender}] *auto reply*  Email sent to Ridgeline alert users. Please reply with your location.
     sender_cooldown_seconds = 60
     max_age_minutes = 15
 """
@@ -47,7 +47,7 @@ ALERT_RE = re.compile(
 # conversation, not a new call for help (Ridgeline's sosReplyRe / REPLY_RE).
 REPLY_RE = re.compile(r"^\s*@\[")
 
-DEFAULT_REPLY = "@[{sender}] *auto reply*  An email was sent to users who have it enabled in Ridgeline."
+DEFAULT_REPLY = "@[{sender}] *auto reply*  Email sent to Ridgeline alert users. Please reply with your location."
 
 # The bot's limit for a channel message, "<bot name>: " included.
 MAX_CHANNEL_BYTES = 150

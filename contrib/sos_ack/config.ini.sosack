@@ -1,6 +1,6 @@
 [SosAck]
 enabled = true
 channel = #sos
-reply = @[{sender}] *auto reply*  An email was sent to users who have it enabled in Ridgeline.
+reply = @[{sender}] *auto reply*  Email sent to Ridgeline alert users. Please reply with your location.
 sender_cooldown_seconds = 60
 max_age_minutes = 15

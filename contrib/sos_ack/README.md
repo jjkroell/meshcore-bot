@@ -4,7 +4,7 @@ A local service plugin for meshcore-bot. When someone sends a message on
 **#sos** containing one of [Ridgeline](https://ridgeline.ve7kod.ca)'s emergency
 words, the bot replies on #sos so the sender knows their call got out:
 
-> @[KOD - Jesse] \*auto reply\*  An email was sent to users who have it enabled in Ridgeline.
+> @[KOD - Jesse] \*auto reply\*  Email sent to Ridgeline alert users. Please reply with your location.
 
 ## Trigger words
 
