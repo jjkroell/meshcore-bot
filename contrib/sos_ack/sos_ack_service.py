@@ -1,4 +1,4 @@
-"""
+r"""
 #sos acknowledgement for meshcore-bot (local service plugin).
 
 When someone sends a message on #sos containing one of Ridgeline's emergency
@@ -9,6 +9,10 @@ web/src/lib/sos.svelte.ts ALERT_RE): sos, emergency, mayday, 911, threat or
 life as a whole word ("#sos", the channel's own tag, doesn't count), or
 "need help" / "needs help" / "help me". A message that opens with an
 @-mention is a reply, not a new call, and gets no reply. Keep the three in step.
+
+A call that says it's a test (Ridgeline's sosTestRe: test, tests, testing,
+tested) gets test_reply instead: Ridgeline only emails those to accounts that
+opted in to test messages, so "email sent" would be wrong.
 
 This listens to the radio's channel messages directly, like the Discord bridge
 does, so it works without #sos in [Channels] monitor_channels. Leave #sos OUT
@@ -21,9 +25,14 @@ Config (local/config.ini):
     [SosAck]
     enabled = true
     channel = #sos              (or a list: #sos, #sos-test)
-    reply = @[{sender}] *auto reply*  Email sent to Ridgeline alert users. Please reply with your location.
+    reply = @[{sender}] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.
+    test_reply = @[{sender}] Test received
     sender_cooldown_seconds = 60
     max_age_minutes = 15
+
+A reply may use emergency words only if it opens with "@[{sender}]": Ridgeline
+treats a message that starts with an @-mention as a reply, never an alert. \n
+in a reply is a line break.
 """
 
 from __future__ import annotations
@@ -47,7 +56,15 @@ ALERT_RE = re.compile(
 # conversation, not a new call for help (Ridgeline's sosReplyRe / REPLY_RE).
 REPLY_RE = re.compile(r"^\s*@\[")
 
-DEFAULT_REPLY = "@[{sender}] *auto reply*  Email sent to Ridgeline alert users. Please reply with your location."
+# A call that says it's a test (Ridgeline's sosTestRe in internal/api/sos_alerts.go).
+TEST_RE = re.compile(r"\btest(s|ing|ed)?\b", re.IGNORECASE)
+
+DEFAULT_REPLY = (
+    "@[{sender}] SOS received, email sent to Ridgeline Alert users.\n\n"
+    "Send your location and nature of the emergency ASAP."
+)
+DEFAULT_TEST_REPLY = "@[{sender}] Test received"
+MENTION = "@[{sender}]"
 
 # The bot's limit for a channel message, "<bot name>: " included.
 MAX_CHANNEL_BYTES = 150
@@ -65,6 +82,23 @@ def is_alert(text: str) -> bool:
     """Whether a #sos message is a call for help (Ridgeline's rule): an
     emergency word, and not a reply opening with an @-mention."""
     return has_alert_word(text) and not REPLY_RE.match(text)
+
+
+def is_test(text: str) -> bool:
+    """Whether a call says it's a test (Ridgeline emails it only to accounts
+    that opted in to test messages)."""
+    return bool(TEST_RE.search(text))
+
+
+def decode_escapes(text: str) -> str:
+    """\\n, \\t in a config value become a line break / tab (\\\\ = a backslash),
+    as modules.utils.decode_escape_sequences does."""
+    return (text.replace("\\\\", "\x00").replace("\\n", "\n").replace("\\t", "\t")
+            .replace("\\r", "\r").replace("\x00", "\\"))
+
+
+def opens_with_mention(template: str) -> bool:
+    return template.lstrip().startswith(MENTION)
 
 
 def split_sender(text: str) -> tuple[str, str]:
@@ -88,10 +122,11 @@ class SosAckService(BaseServicePlugin):
         # One channel or a comma-separated list (e.g. "#sos, #sos-test").
         raw = cfg.get(sec, "channel", fallback="#sos")
         self.channels = {c.strip().lstrip("#").lower() for c in raw.split(",") if c.strip()}
-        self.reply = cfg.get(sec, "reply", fallback=DEFAULT_REPLY).strip()
+        self.reply = decode_escapes(cfg.get(sec, "reply", fallback=DEFAULT_REPLY).strip())
+        self.test_reply = decode_escapes(cfg.get(sec, "test_reply", fallback=DEFAULT_TEST_REPLY).strip())
         self.cooldown = cfg.getfloat(sec, "sender_cooldown_seconds", fallback=60.0)
         self.max_age = cfg.getfloat(sec, "max_age_minutes", fallback=15.0) * 60
-        self._last_ack: dict[str, float] = {}
+        self._last_ack: dict[tuple[str, bool], float] = {}
 
     # --- lifecycle ---
 
@@ -99,11 +134,14 @@ class SosAckService(BaseServicePlugin):
         # Some bot versions call start() twice; subscribe only once.
         if not self.enabled or self._running:
             return
-        if has_alert_word(self._render("Tester", None)):
-            # The reply would itself look like an emergency to Ridgeline (and to
-            # this service), alerting every monitor. Refuse to run with it.
-            self.logger.error("SosAck: the reply template contains an emergency word; not starting")
-            return
+        for key, template in (("reply", self.reply), ("test_reply", self.test_reply)):
+            if not opens_with_mention(template) and has_alert_word(self._render(template, "Tester", None)):
+                # The reply would itself look like an emergency to Ridgeline (and
+                # to this service), alerting every monitor. Refuse to run with it.
+                self.logger.error(
+                    f"SosAck: {key} contains an emergency word but doesn't open with @[{{sender}}]; not starting"
+                )
+                return
         if not getattr(self.bot, "meshcore", None):
             self.logger.error("SosAck: meshcore not available; not starting")
             return
@@ -130,20 +168,27 @@ class SosAckService(BaseServicePlugin):
     def _same_channel(self, name: str) -> bool:
         return name.strip().lstrip("#").lower() in self.channels
 
-    def _render(self, sender: str, hops: int | None) -> str:
+    def _render(self, template: str, sender: str, hops: int | None) -> str:
         """The reply, shortened to fit one channel message: the radio sends
         "<bot name>: <text>" in at most MAX_CHANNEL_BYTES, so a long sender name
-        loses the hop count first, then the mention."""
-        text = self._format(sender, hops)
+        loses the hop count first, then the mention (or, when the mention is
+        what keeps the reply from being an alert, it's shortened instead)."""
         bot_name = self.bot.config.get("Bot", "bot_name", fallback="the bot")
         room = MAX_CHANNEL_BYTES - len(bot_name.encode()) - 2
-        if len(text.encode()) > room:
-            text = self._format(sender, None)
-        if len(text.encode()) > room:
-            text = self._format("", None)
+        fits = lambda t: len(t.encode()) <= room
+        text = self._format(template, sender, hops)
+        if not fits(text):
+            text = self._format(template, sender, None)
+        if not fits(text) and opens_with_mention(template):
+            # Keep "@[...]" so Ridgeline still reads it as a reply; trim the name.
+            while sender and not fits(text):
+                sender = sender[:-1]
+                text = self._format(template, sender or "?", None)
+        elif not fits(text):
+            text = self._format(template, "", None)
         return text
 
-    def _format(self, sender: str, hops: int | None) -> str:
+    def _format(self, template: str, sender: str, hops: int | None) -> str:
         bot_name = self.bot.config.get("Bot", "bot_name", fallback="the bot")
         if hops is None:
             hops_text = ""
@@ -152,11 +197,15 @@ class SosAckService(BaseServicePlugin):
         else:
             hops_text = f" ({hops} hop{'s' if hops != 1 else ''})"
         fields = dict(bot=bot_name, hops=hops if hops is not None else "?", hops_text=hops_text)
-        text = self.reply.format(sender=sender, **fields) if sender else ""
+        if opens_with_mention(template):
+            # An @-mention at the start makes Ridgeline read this as a reply, so
+            # any name (even "SOS Sam") is safe; with no name, "@[?]" holds it.
+            return template.format(sender=sender or "?", **fields)
+        text = template.format(sender=sender, **fields) if sender else ""
         if not sender or has_alert_word(text):
-            # No name, or one like "SOS Dave" that would make the reply an
+            # No name, or one like "SOS Sam" that would make the reply an
             # alert: leave the mention out rather than raise a false one.
-            text = self.reply.replace("@[{sender}] ", "").replace("{sender}", "").format(sender="", **fields)
+            text = template.replace("@[{sender}] ", "").replace("{sender}", "").format(sender="", **fields)
         return text
 
     async def _on_channel_message(self, event, metadata=None) -> None:
@@ -178,7 +227,10 @@ class SosAckService(BaseServicePlugin):
                 self.logger.info(f"SosAck: not acknowledging an old message from {sender or 'unknown'}")
                 return
 
-            key = sender.lower() or "?"
+            test = is_test(body)
+            # Tests and real calls cool down separately: a real call right after
+            # a test still gets its reply.
+            key = (sender.lower() or "?", test)
             now = time.monotonic()
             if now - self._last_ack.get(key, -1e9) < self.cooldown:
                 return
@@ -188,8 +240,9 @@ class SosAckService(BaseServicePlugin):
             # 0xFF = not flooded (unknown here).
             path_len = payload.get("path_len")
             hops = path_len & 63 if isinstance(path_len, int) and 0 <= path_len < 0xFF else None
-            text = self._render(sender, hops)
-            self.logger.info(f"SosAck: emergency word from {sender or 'unknown'}; replying on {channel_name}")
+            text = self._render(self.test_reply if test else self.reply, sender, hops)
+            kind = "test call" if test else "emergency word"
+            self.logger.info(f"SosAck: {kind} from {sender or 'unknown'}; replying on {channel_name}")
             ok = await self.bot.command_manager.send_channel_message(
                 channel_name, text, skip_user_rate_limit=True, scope=self._flood_scope()
             )
