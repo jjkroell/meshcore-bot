@@ -91,6 +91,7 @@ def _strip_ansi_codes(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
+from modules.config_file_edit import set_options
 from modules.config_snapshot import config_to_redacted_sections
 from modules.feed_manager import FeedManager
 from modules.repeater_manager import RepeaterManager
@@ -289,6 +290,14 @@ class BotDataViewer:
         if os.path.exists(config_path):
             config.read(config_path)
         return config
+
+    def _save_config_options(self, section: str, keys: list[str]) -> None:
+        """Write these options' in-memory values to config.ini, editing only their lines.
+
+        ConfigParser.write() would rebuild the file and drop every comment.
+        """
+        if keys:
+            set_options(self.config_path, section, {k: self.config.get(section, k, raw=True) for k in keys})
 
     def _get_version_info(self) -> dict[str, str | None]:
         """Get version info for footer via centralized version resolver. Never raises."""
@@ -1695,8 +1704,11 @@ class BotDataViewer:
                         )
                     if 'alert_email' in data:
                         self.config.set('Connection', 'radio_zombie_alert_email', str(data['alert_email']))
-                    with open(self.config_path, 'w') as fh:
-                        self.config.write(fh)
+                    self._save_config_options('Connection', [
+                        k for k, field in (('radio_zombie_alert_enabled', 'alert_enabled'),
+                                           ('radio_zombie_alert_email', 'alert_email'))
+                        if field in data
+                    ])
                     config_saved = True
                     self.logger.info("Zombie alert settings written to config.ini")
                 except OSError as exc:
@@ -1777,8 +1789,7 @@ class BotDataViewer:
                         if not self.config.has_section('Connection'):
                             self.config.add_section('Connection')
                         self.config.set('Connection', 'radio_debug', 'true' if enabled else 'false')
-                        with open(self.config_path, 'w') as fh:
-                            self.config.write(fh)
+                        self._save_config_options('Connection', ['radio_debug'])
                         config_saved = True
                         self.logger.info(
                             "radio_debug=%s written to config.ini by web UI", 'true' if enabled else 'false'
@@ -1850,8 +1861,8 @@ class BotDataViewer:
                     try:
                         self.config.set('Connection', 'radio_probe_interval_seconds', str(probe_interval))
                         self.config.set('Connection', 'radio_probe_fail_threshold', str(probe_fail_threshold))
-                        with open(self.config_path, 'w') as f:
-                            self.config.write(f)
+                        self._save_config_options('Connection', [
+                            'radio_probe_interval_seconds', 'radio_probe_fail_threshold'])
                         config_saved = True
                         self.logger.info("Radio probe settings written to config.ini")
                     except Exception as exc:
@@ -1910,8 +1921,8 @@ class BotDataViewer:
                         self.config.set('Connection', 'radio_offline_threshold', str(offline_threshold))
                         self.config.set('Connection', 'radio_offline_alert_enabled', 'true' if alert_enabled else 'false')
                         self.config.set('Connection', 'radio_offline_alert_email', alert_email)
-                        with open(self.config_path, 'w') as f:
-                            self.config.write(f)
+                        self._save_config_options('Connection', [
+                            'radio_offline_threshold', 'radio_offline_alert_enabled', 'radio_offline_alert_email'])
                         config_saved = True
                         self.logger.info("Radio offline alert settings written to config.ini")
                     except Exception as exc:

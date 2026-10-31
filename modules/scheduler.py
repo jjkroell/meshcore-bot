@@ -310,14 +310,17 @@ class MessageScheduler:
     def _decrement_scheduled_count(self, config_key: str, job_id: str, base_value: str, remaining: int) -> None:
         """Decrement the ::N counter in config after a send. Removes entry and job when exhausted."""
         import configparser as _cp
+
+        from .config_file_edit import remove_option, set_options
         new_count = remaining - 1
         try:
             fresh = _cp.ConfigParser()
             fresh.read(self.bot.config_file, encoding='utf-8')
             if not fresh.has_section('Scheduled_Messages'):
                 return
+            # Edit config.ini as text: ConfigParser.write() would drop every comment.
             if new_count <= 0:
-                fresh.remove_option('Scheduled_Messages', config_key)
+                remove_option(self.bot.config_file, 'Scheduled_Messages', config_key)
                 if self.bot.config.has_section('Scheduled_Messages'):
                     self.bot.config.remove_option('Scheduled_Messages', config_key)
                 try:
@@ -326,10 +329,8 @@ class MessageScheduler:
                     pass
                 self.logger.info(f"Scheduled message '{config_key}' reached send limit — removed")
             else:
-                fresh.set('Scheduled_Messages', config_key, f"{base_value}::{new_count}")
+                set_options(self.bot.config_file, 'Scheduled_Messages', {config_key: f"{base_value}::{new_count}"})
                 self.logger.info(f"Scheduled message '{config_key}': {new_count} send(s) remaining")
-            with open(self.bot.config_file, 'w', encoding='utf-8') as _f:
-                fresh.write(_f)
         except Exception as e:
             self.logger.error(f"Error updating count for scheduled message '{config_key}': {e}")
 
