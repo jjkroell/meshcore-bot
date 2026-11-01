@@ -6,3 +6,6 @@ Type=oneshot
 ExecStart=/opt/clock_sync_web/clock-sync-run-request.sh
 # The wrapper caps a run at 40 min; leave room for stopping/starting the bot.
 TimeoutStartSec=50min
+# 1 = the run finished but some nodes failed (shown on the page);
+# 75 = another clock sync already held the lock. Neither is a unit failure.
+SuccessExitStatus=1 75
