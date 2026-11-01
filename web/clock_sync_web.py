@@ -621,7 +621,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 <table><thead><tr><th>Node</th><th>Public key</th><th>Last success</th><th>Last run</th><th></th></tr></thead>
 <tbody id="rows"></tbody></table>
 </div>
-<p class="small muted">Keys are matched by prefix against the companion radio's contact list. <b>CONTACT_NOT_FOUND</b> means the radio doesn't have that repeater as a contact right now. Entries not changed here keep their exact text in the file, and a backup is kept on every save.</p>
+<p class="small muted">Keys are matched by prefix against the companion radio's contact list. When the radio has lost a repeater (meshcore-bot purges them when its contact list fills), the clock sync re-adds it from the bot's database first. That needs a prefix matching exactly one repeater the bot has heard, or the full 64-hex key. <b>CONTACT_NOT_FOUND</b> now means it couldn't, and the detail says why. Entries not changed here keep their exact text in the file, and a backup is kept on every save.</p>
 </main>
 <script>
 let data=null, editing=null;

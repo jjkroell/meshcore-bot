@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ DEFAULT_REPLY_TIMEOUT = 20
 DEFAULT_DELAY_BETWEEN_NODES = 30
 DEFAULT_CHANNEL_SCAN_LIMIT = 20
 DEFAULT_STATE_FILE = "/opt/clock_sync/state.json"
+DEFAULT_BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
 DEFAULT_CLKREBOOT_MIN_HOURS = 12  # must be well under the ~48h run cadence
 DEFAULT_CLKREBOOT_RETRY_DELAY = 30  # seconds to let a node reboot before retrying `clock sync`
 CHAN_MSG_MAX_LEN = 140  # keep comfortably inside a single-packet channel message
@@ -115,6 +117,104 @@ def find_contact(mc: MeshCore, node_cfg: dict) -> Optional[dict]:
             if contact.get("adv_name") == name:
                 return contact
     return None
+
+
+def _flood_contact(rec: dict) -> dict:
+    """A contact record in the shape meshcore's add_contact wants, set to flood
+    (the run resets the path anyway; a stored direct path may be stale)."""
+    name = str(rec.get("adv_name") or "")
+    raw = name.encode()[:31]
+    while raw:
+        try:
+            name = raw.decode()
+            break
+        except UnicodeDecodeError:
+            raw = raw[:-1]
+    else:
+        name = ""
+    return {
+        "public_key": str(rec["public_key"]).lower(),
+        "type": int(rec.get("type") or 2),
+        "flags": int(rec.get("flags") or 0),
+        "out_path_len": -1,
+        "out_path": "",
+        "out_path_hash_mode": 0,
+        "adv_name": name,
+        "last_advert": int(rec.get("last_advert") or 0),
+        "adv_lat": float(rec.get("adv_lat") or 0.0),
+        "adv_lon": float(rec.get("adv_lon") or 0.0),
+    }
+
+
+def lookup_contact_record(bot_db: str, key: str, name: str) -> tuple[Optional[dict], str]:
+    """Find a repeater the companion has lost, so it can be re-added.
+
+    meshcore-bot (auto_manage_contacts = bot) purges repeaters from the
+    companion when its contact list fills, and its database keeps each one's
+    full contact record (repeater_contacts.contact_data). Look the configured
+    key up there - a 6-hex prefix is enough if it matches exactly one
+    repeater. A full 64-hex key in the config works even for a repeater the
+    bot has never heard (re-added by key and name alone).
+
+    Returns (contact record, where it came from) or (None, why not)."""
+    key = key.lower()
+    full = len(key) == 64
+    records: dict[str, dict] = {}
+    try:
+        con = sqlite3.connect(f"file:{bot_db}?immutable=1", uri=True, timeout=5)
+        try:
+            for pk, data, rname, lat, lon in con.execute(
+                "SELECT public_key, contact_data, name, latitude, longitude FROM repeater_contacts "
+                "WHERE public_key LIKE ?", (key + "%",)
+            ):
+                rec = None
+                if data:
+                    try:
+                        rec = json.loads(data)
+                    except ValueError:
+                        rec = None
+                if not isinstance(rec, dict) or not rec.get("public_key"):
+                    rec = {"public_key": pk, "adv_name": rname, "adv_lat": lat, "adv_lon": lon}
+                records[pk.lower()] = rec
+            for pk, rname, lat, lon in con.execute(
+                "SELECT public_key, name, latitude, longitude FROM complete_contact_tracking "
+                "WHERE public_key LIKE ? AND (role = 'repeater' OR device_type IN ('Repeater', 'repeater', '2'))",
+                (key + "%",),
+            ):
+                records.setdefault(pk.lower(), {"public_key": pk, "adv_name": rname, "adv_lat": lat, "adv_lon": lon})
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        logger.warning("Bot database %s unreadable: %s", bot_db, e)
+        if not full:
+            return None, f"couldn't read the bot's database ({e})"
+
+    if len(records) > 1:
+        return None, f"prefix {key} matches {len(records)} repeaters in the bot's database - use a longer key"
+    if records:
+        rec = next(iter(records.values()))
+        return _flood_contact(rec), "the bot's database"
+    if full:
+        return _flood_contact({"public_key": key, "adv_name": name}), "the full key in the config"
+    return None, "not in the bot's database either - enter its full public key"
+
+
+async def restore_contact(mc: MeshCore, node_cfg: dict, bot_db: str) -> tuple[Optional[dict], str]:
+    """Re-add a configured repeater the companion no longer has."""
+    key = str(node_cfg.get("pubkey_prefix") or "").strip()
+    if not key:
+        return None, "no pubkey_prefix to re-add it by"
+    rec, source = lookup_contact_record(bot_db, key, node_cfg.get("name") or "")
+    if rec is None:
+        return None, source
+    res = await mc.commands.add_contact(rec)
+    if res is None or res.type == EventType.ERROR:
+        detail = getattr(res, "payload", None)
+        return None, f"re-adding it failed ({detail}) - the radio's contact list may be full"
+    mc.contacts[rec["public_key"]] = rec
+    logger.info("%s: re-added to the companion's contacts from %s (%s)",
+                node_cfg.get("name") or key, source, rec["public_key"][:12])
+    return rec, source
 
 
 async def find_or_create_channel(mc: MeshCore, name: str, scan_limit: int) -> Optional[int]:
@@ -328,13 +428,44 @@ async def sync_one(
     auto_clkreboot: bool = True,
     clkreboot_min_hours: float = DEFAULT_CLKREBOOT_MIN_HOURS,
     clkreboot_retry_delay: float = DEFAULT_CLKREBOOT_RETRY_DELAY,
+    restore_missing: bool = True,
+    bot_db: str = DEFAULT_BOT_DB,
 ) -> SyncResult:
     label = node_cfg.get("name") or node_cfg.get("pubkey_prefix") or "?"
     state = state if state is not None else {}
 
     contact = find_contact(mc, node_cfg)
+    restored = False
     if contact is None:
-        return SyncResult(label, Outcome.CONTACT_NOT_FOUND, "not in companion's contact list")
+        if not restore_missing:
+            return SyncResult(label, Outcome.CONTACT_NOT_FOUND, "not in companion's contact list")
+        contact, why = await restore_contact(mc, node_cfg, bot_db)
+        if contact is None:
+            return SyncResult(label, Outcome.CONTACT_NOT_FOUND, f"not in companion's contact list; {why}")
+        restored = True
+
+    result = await _sync_found(
+        mc, contact, label, admin_password, login_timeout, reply_timeout, reset_path, state,
+        auto_clkreboot, clkreboot_min_hours, clkreboot_retry_delay,
+    )
+    if restored:
+        result.detail = f"{result.detail} (contact re-added)" if result.detail else "contact re-added"
+    return result
+
+
+async def _sync_found(
+    mc: MeshCore,
+    contact: dict,
+    label: str,
+    admin_password: str,
+    login_timeout: float,
+    reply_timeout: float,
+    reset_path: bool,
+    state: dict,
+    auto_clkreboot: bool,
+    clkreboot_min_hours: float,
+    clkreboot_retry_delay: float,
+) -> SyncResult:
 
     pubkey_prefix = contact["public_key"][:12]  # 6 bytes hex, matches reader.py attributes
 
@@ -389,6 +520,10 @@ async def run(cfg: dict) -> list[SyncResult]:
     clkreboot_min_hours = cfg.get("clkreboot_min_hours_since_success", DEFAULT_CLKREBOOT_MIN_HOURS)
     clkreboot_retry_delay = cfg.get("clkreboot_retry_delay_seconds", DEFAULT_CLKREBOOT_RETRY_DELAY)
     state_file = cfg.get("state_file", DEFAULT_STATE_FILE)
+    # meshcore-bot purges repeaters from the companion when its contact list
+    # fills; put a configured one back (from the bot's database) when it's missing.
+    restore_missing = cfg.get("restore_missing_contacts", True)
+    bot_db = cfg.get("bot_db", DEFAULT_BOT_DB)
     state = load_state(state_file)
 
     if transport == "serial":
@@ -435,6 +570,8 @@ async def run(cfg: dict) -> list[SyncResult]:
                 auto_clkreboot,
                 clkreboot_min_hours,
                 clkreboot_retry_delay,
+                restore_missing,
+                bot_db,
             )
             results.append(result)
             logger.info("%s: %s (%s)", result.node, result.outcome, result.detail)
