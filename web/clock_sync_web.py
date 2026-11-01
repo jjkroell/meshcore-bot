@@ -53,7 +53,7 @@ STATE_FILE = "/opt/clock_sync/state.json"
 SYNC_LOG = "/var/log/clock_sync/clock_sync.log"
 BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
 KEEP_BACKUPS = 30
-MIN_KEY_HEX = 12  # clock_sync matches contacts by public-key prefix
+MIN_KEY_HEX = 6  # clock_sync matches contacts by public-key prefix; 3 bytes is the house style
 
 SECRET_KEYS = re.compile(r"(password|secret|token|key)", re.I)
 HEX = re.compile(r"^[0-9a-f]+$")
@@ -178,28 +178,31 @@ def apply_ops(text: str, cfg: dict, block: RepeatersBlock, ops: list[dict]) -> t
     Returns (new text, new repeaters list)."""
     old = cfg["repeaters"]
     seen_ids: set[int] = set()
-    seen_keys: set[str] = set()
+    keys: list[tuple[str, bool]] = []  # (key, new or changed)
     chunks: list[str] = []
     new: list[dict] = []
     for op in ops:
         name = str(op.get("name", "")).strip()
         if not name or len(name) > 64 or "\n" in name:
             raise ValueError("each node needs a name (one line, up to 64 characters)")
-        key = normalise_key(op.get("pubkey", ""))
-        short = key[:MIN_KEY_HEX]
-        if short in seen_keys:
-            raise ValueError(f"public key {short}… is listed twice")
-        seen_keys.add(short)
+        raw_key = str(op.get("pubkey") or "").strip().lower()
         oid = op.get("id")
+        orig = None
         if oid is not None:
             if not isinstance(oid, int) or not 0 <= oid < len(old) or oid in seen_ids:
                 raise ValueError("stale or invalid node id; reload the page")
             seen_ids.add(oid)
             orig = old[oid]
-            if orig.get("name") == name and str(orig.get("pubkey_prefix", "")).lower() == key:
-                chunks.append(block.chunks[oid])  # untouched: keep its text exactly
-                new.append(orig)
-                continue
+        # An entry left exactly as it is is kept as it is, whatever its key looks like.
+        unchanged = orig is not None and orig.get("name") == name and str(orig.get("pubkey_prefix") or "").lower() == raw_key
+        key = raw_key if unchanged else normalise_key(raw_key)
+        if key:
+            keys.append((key, not unchanged))
+        if unchanged:
+            chunks.append(block.chunks[oid])  # untouched: keep its text exactly
+            new.append(orig)
+            continue
+        if orig is not None:
             entry = dict(orig)
             entry["name"] = name
             entry["pubkey_prefix"] = key
@@ -210,6 +213,12 @@ def apply_ops(text: str, cfg: dict, block: RepeatersBlock, ops: list[dict]) -> t
             entry = {"name": name, "pubkey_prefix": key}
             chunks.append(block.render_entry(entry))
             new.append(entry)
+    # Two keys where one is a prefix of the other would both match one node.
+    # Only refuse it when this save introduces the clash.
+    for i, (a, a_new) in enumerate(keys):
+        for b, b_new in keys[i + 1:]:
+            if (a_new or b_new) and (a.startswith(b) or b.startswith(a)):
+                raise ValueError(f"public key {a} overlaps {b}: both would match the same node")
     if not new:
         raise ValueError("the list can't be empty (clock_sync.py refuses to run without repeaters)")
     out = block.build(chunks)
@@ -316,6 +325,25 @@ def suggest(q: str, limit: int = 15) -> list[dict]:
     return [{"pubkey": k, "name": n, "seen": str(s or "")[:16]} for k, n, s in rows if k]
 
 
+def known_matches(prefix: str) -> list[str]:
+    """Names of the distinct repeaters the bot has heard whose key starts with prefix."""
+    try:
+        con = sqlite3.connect(f"file:{BOT_DB}?immutable=1", uri=True, timeout=2)
+        rows = con.execute(
+            """SELECT public_key, name FROM repeater_contacts WHERE public_key LIKE ?
+               UNION SELECT public_key, name FROM complete_contact_tracking
+                WHERE public_key LIKE ? AND (role = 'repeater' OR device_type IN ('Repeater', 'repeater', '2'))""",
+            (prefix + "%", prefix + "%"),
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return []
+    names: dict[str, str] = {}
+    for k, n in rows:
+        names[k] = n or k[:12]
+    return sorted(set(names.values())) if len(names) > 1 else []
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -400,7 +428,9 @@ class Handler(BaseHTTPRequestHandler):
             nodes = []
             for i, r in enumerate(cfg["repeaters"]):
                 key = str(r.get("pubkey_prefix") or "").lower()
-                st = state.get(key[:MIN_KEY_HEX]) if key else None
+                # state.json is keyed by the first 12 hex of the full key.
+                st = max((v for k, v in state.items() if key and (k.startswith(key) or key.startswith(k))),
+                         key=lambda v: v.get("last_success_ts") or 0, default=None)
                 nodes.append({
                     "id": i,
                     "name": r.get("name") or "",
@@ -441,7 +471,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(200, {"ok": True, "unchanged": True, "version": version_of(text)})
                 write_config(CONFIG, new_text, text)
             self.log_message("saved %d repeaters", len(new))
-            self._json(200, {"ok": True, "version": version_of(new_text)})
+            old_keys = {str(r.get("pubkey_prefix") or "").lower() for r in cfg["repeaters"]}
+            warnings = []
+            for r in new:
+                k = str(r.get("pubkey_prefix") or "").lower()
+                if k and k not in old_keys:
+                    clash = known_matches(k)
+                    if clash:
+                        warnings.append(f"{k} matches {len(clash)} repeaters the bot has heard "
+                                        f"({', '.join(clash[:4])}); clock_sync uses whichever is in the radio's contacts. "
+                                        "A longer prefix would pin it down.")
+            self._json(200, {"ok": True, "version": version_of(new_text), "warnings": warnings})
         except ValueError as e:
             self._json(400, {"error": str(e)})
         except (ConfigError, yaml.YAMLError, OSError) as e:
@@ -510,8 +550,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
  <div class="sugg" id="sugg" role="listbox"></div>
  <div class="grid" style="margin-top:10px">
   <div><label for="nn">Name</label><input id="nn" placeholder="Label used in the log and channel summary"></div>
-  <div><label for="nk">Public key (full key preferred, at least 12 hex)</label>
-   <input id="nk" placeholder="e.g. 6df99ff64d4d…" autocomplete="off" spellcheck="false"></div>
+  <div><label for="nk">Public key or prefix (at least 6 hex)</label>
+   <input id="nk" placeholder="e.g. 6df99f" autocomplete="off" spellcheck="false"></div>
   <div><button class="primary" id="add">Add</button></div>
  </div>
 </div>
@@ -554,7 +594,8 @@ async function save(nodes,okText){
   body:JSON.stringify({version:data.version,nodes:nodes.map(n=>({id:n.id,name:n.name,pubkey:n.pubkey}))})});
  const j=await r.json().catch(()=>({error:"bad response"}));
  if(!r.ok){msg(j.error||("HTTP "+r.status),"err");if(r.status===409)await load();return false;}
- msg(j.unchanged?"No change.":okText,"info");editing=null;await load();return true;}
+ editing=null;await load();
+ if(j.warnings&&j.warnings.length)msg(okText+" Note: "+j.warnings.join(" "),"err");else msg(j.unchanged?"No change.":okText,"info");return true;}
 function current(){return data.nodes.map(n=>({id:n.id,name:n.name,pubkey:n.pubkey}));}
 async function saveEdit(i){const ns=current();ns[i].name=$("#en").value.trim();ns[i].pubkey=$("#ek").value.trim();
  await save(ns,`Saved ${ns[i].name}.`);}
@@ -567,12 +608,12 @@ let t=null;
 $("#q").oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{const q=$("#q").value.trim();const s=$("#sugg");
  if(q.length<2){s.style.display="none";return;}
  const j=await (await fetch("/api/suggest?q="+encodeURIComponent(q))).json();
- const have=new Set(data.nodes.map(n=>n.pubkey.slice(0,12)));
+ const listed=k=>data.nodes.some(n=>n.pubkey&&(k.startsWith(n.pubkey)||n.pubkey.startsWith(k)));
  s.innerHTML=j.results.length?j.results.map(r=>`<div tabindex="0" data-k="${esc(r.pubkey)}" data-n="${esc(r.name)}"><b>${esc(r.name)}</b>
   <code class="small muted">${esc(r.pubkey.slice(0,16))}…</code> <span class="small muted">heard ${esc(r.seen)}</span>
-  ${have.has(r.pubkey.slice(0,12))?'<span class="chip warn">already listed</span>':""}</div>`).join(""):'<div class="muted">No match in the bot\'s database</div>';
+  ${listed(r.pubkey)?'<span class="chip warn">already listed</span>':""}</div>`).join(""):'<div class="muted">No match in the bot\'s database</div>';
  s.style.display="block";},250);};
-$("#sugg").onclick=e=>{const d=e.target.closest("[data-k]");if(!d)return;$("#nk").value=d.dataset.k;$("#nn").value=d.dataset.n;$("#sugg").style.display="none";};
+$("#sugg").onclick=e=>{const d=e.target.closest("[data-k]");if(!d)return;$("#nk").value=d.dataset.k.slice(0,6);$("#nn").value=d.dataset.n;$("#sugg").style.display="none";};
 $("#sugg").onkeydown=e=>{if(e.key==="Enter")$("#sugg").onclick(e);};
 load().catch(e=>msg(String(e),"err"));
 </script></body></html>
