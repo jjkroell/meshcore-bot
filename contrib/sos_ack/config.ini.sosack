@@ -1,7 +1,7 @@
 [SosAck]
 enabled = true
 channel = #sos
-reply = @[{sender}] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.
-test_reply = @[{sender}] Test received
+reply = @[{sender}]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.
+test_reply = @[{sender}]\nTest received
 sender_cooldown_seconds = 60
 max_age_minutes = 15

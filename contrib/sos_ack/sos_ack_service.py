@@ -25,8 +25,8 @@ Config (local/config.ini):
     [SosAck]
     enabled = true
     channel = #sos              (or a list: #sos, #sos-test)
-    reply = @[{sender}] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.
-    test_reply = @[{sender}] Test received
+    reply = @[{sender}]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.
+    test_reply = @[{sender}]\nTest received
     sender_cooldown_seconds = 60
     max_age_minutes = 15
 
@@ -60,10 +60,10 @@ REPLY_RE = re.compile(r"^\s*@\[")
 TEST_RE = re.compile(r"\btest(s|ing|ed)?\b", re.IGNORECASE)
 
 DEFAULT_REPLY = (
-    "@[{sender}] SOS received, email sent to Ridgeline Alert users.\n\n"
+    "@[{sender}]\nSOS received, email sent to Ridgeline Alert users.\n\n"
     "Send your location and nature of the emergency ASAP."
 )
-DEFAULT_TEST_REPLY = "@[{sender}] Test received"
+DEFAULT_TEST_REPLY = "@[{sender}]\nTest received"
 MENTION = "@[{sender}]"
 
 # The bot's limit for a channel message, "<bot name>: " included.

@@ -4,7 +4,8 @@ A local service plugin for meshcore-bot. When someone sends a message on
 **#sos** containing one of [Ridgeline](https://ridgeline.ve7kod.ca)'s emergency
 words, the bot replies on #sos so the sender knows their call got out:
 
-> @[KOD - Jesse] SOS received, email sent to Ridgeline Alert users.
+> @[KOD - Jesse]
+> SOS received, email sent to Ridgeline Alert users.
 >
 > Send your location and nature of the emergency ASAP.
 
@@ -12,7 +13,8 @@ A call that says it's a test (**test, tests, testing, tested** anywhere in it,
 Ridgeline's own test rule) gets `test_reply` instead, because Ridgeline only
 emails test calls to accounts that opted in to test messages:
 
-> @[KOD - Jesse] Test received
+> @[KOD - Jesse]
+> Test received
 
 ## Trigger words
 

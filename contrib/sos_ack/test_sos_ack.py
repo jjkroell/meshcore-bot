@@ -52,13 +52,13 @@ for ch, t in sent:
     assert not m.is_alert(t), t
 texts = [t for _, t in sent]
 assert texts == [
-    "@[Dave] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
-    "@[SOS Sam] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
-    "@[Kim] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
-    "@[Tess] Test received",
-    "@[A Very Long Node Name 🗻🗻] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
-    "@[Tess] SOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
-    "@[Mo] Test received",
+    "@[Dave]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
+    "@[SOS Sam]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
+    "@[Kim]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
+    "@[Tess]\nTest received",
+    "@[A Very Long Node Name 🗻🗻]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
+    "@[Tess]\nSOS received, email sent to Ridgeline Alert users.\n\nSend your location and nature of the emergency ASAP.",
+    "@[Mo]\nTest received",
 ], texts
 
 # the monthly test message, \n decoded by the scheduler
@@ -69,7 +69,7 @@ assert not m.is_test("SOS contest results") and m.is_test("SOS testing")
 # a very long name is trimmed, never dropped (the mention keeps it a reply)
 t = s._render(s.reply, "N" * 60, None)
 assert t.startswith("@[N") and len(("KOD-BOT: " + t).encode()) <= 150 and not m.is_alert(t), t
-assert s._render(s.reply, "", None).startswith("@[?] ")
+assert s._render(s.reply, "", None).startswith("@[?]\n")
 
 # escapes from config
 assert m.decode_escapes(r"a\n\nb") == "a\n\nb" and m.decode_escapes(r"a\\nb") == r"a\nb"
