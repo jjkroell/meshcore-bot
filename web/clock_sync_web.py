@@ -298,8 +298,20 @@ RESULT_RE = re.compile(r"^(\S+ \S+) INFO clock_sync: (.+?): ([A-Z_]+) \((.*)\)\s
 DONE_RE = re.compile(r"^(\S+ \S+) INFO clock_sync: Done in ([\d.]+)s: (\d+)/(\d+) succeeded")
 
 
+START_RE = re.compile(r"^(\S+?)[T ](\d\d:\d\d:\d\d)\S* run-clock-sync: stopping meshcore-bot")
+END_MARK = " run-clock-sync: restarting meshcore-bot"
+
+
 def last_run() -> dict:
-    """Per-node outcome of the most recent finished run, keyed by configured name."""
+    """Per-node outcome of the latest run, keyed by configured name.
+
+    A run is everything from the wrapper's "stopping meshcore-bot" to its
+    "restarting meshcore-bot". The latest FINISHED run (one with a "Done in"
+    line) is the base; if a newer run is still going, or was stopped early,
+    its results so far replace the base's for the nodes it has reached
+    ("current": True), so the page never shows a stale result next to a
+    fresh last-success time.
+    """
     try:
         with open(SYNC_LOG, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -307,18 +319,41 @@ def last_run() -> dict:
             lines = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return {}
-    done = max((i for i, l in enumerate(lines) if DONE_RE.match(l)), default=None)
-    if done is None:
-        return {}
-    m = DONE_RE.match(lines[done])
-    results = {}
-    for l in reversed(lines[:done]):
-        if " run-clock-sync: stopping meshcore-bot" in l or "Connecting to companion" in l:
-            break
+    runs: list[dict] = []
+    cur = None
+    for l in lines:
+        m = START_RE.match(l)
+        if m:
+            cur = {"started": f"{m.group(1)} {m.group(2)}", "nodes": {}, "done": None, "ended": False}
+            runs.append(cur)
+            continue
+        if cur is None:
+            # The tail began mid-run: collect what's there as an unnamed run.
+            cur = {"started": None, "nodes": {}, "done": None, "ended": False}
+            runs.append(cur)
         r = RESULT_RE.match(l)
-        if r and r.group(2) not in results:
-            results[r.group(2)] = {"outcome": r.group(3), "detail": r.group(4), "at": r.group(1)[:19]}
-    return {"finished": m.group(1)[:19], "ok": int(m.group(3)), "total": int(m.group(4)), "nodes": results}
+        if r:
+            cur["nodes"][r.group(2)] = {"outcome": r.group(3), "detail": r.group(4), "at": r.group(1)[:19]}
+        d = DONE_RE.match(l)
+        if d:
+            cur["done"] = {"finished": d.group(1)[:19], "ok": int(d.group(3)), "total": int(d.group(4))}
+        if END_MARK in l:
+            cur["ended"] = True
+    finished = next((r for r in reversed(runs) if r["done"]), None)
+    out: dict = {"nodes": {}}
+    if finished:
+        out.update(finished["done"])
+        out["nodes"] = dict(finished["nodes"])
+    latest = runs[-1] if runs else None
+    if latest and latest is not finished and latest["started"]:
+        out["live"] = {
+            "started": latest["started"],
+            "state": "stopped early" if latest["ended"] else "in progress",
+            "done": len(latest["nodes"]),
+        }
+        for name, res in latest["nodes"].items():
+            out["nodes"][name] = {**res, "current": True}
+    return out
 
 
 def suggest(q: str, limit: int = 15) -> list[dict]:
@@ -598,13 +633,14 @@ function ago(ts){if(!ts)return '<span class="muted">never</span>';const h=(Date.
  const cls=h<=60?"ok":h<=24*7?"warn":"bad";return `<span class="${cls}">${t}</span>`;}
 function outcome(r){if(!r)return '<span class="muted">—</span>';
  const cls=/^(SUCCESS|AUTO_REBOOTED)$/.test(r.outcome)?"ok":r.outcome==="ALREADY_CURRENT"?"warn":"bad";
- return `<span class="chip ${cls}">${esc(r.outcome)}</span>`+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"");}
+ return `<span class="chip ${cls}">${esc(r.outcome)}</span>`+(r.current?` <span class="small muted">${esc(r.at.slice(11,16))}</span>`:"")+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"");}
 async function load(){
  const r=await fetch("/api/nodes",{cache:"no-store"});const j=await r.json();
  if(!r.ok){msg(j.error,"err");return;}
  data=j;$("#cfg").textContent=j.config;
  const run=j.run;
- $("#run").innerHTML=run.finished?`<span>Last run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>';
+ $("#run").innerHTML=(run.live?`<span class="chip ${run.live.state==="in progress"?"warn":"bad"}">${run.live.state==="in progress"?"Run in progress":"Run stopped early"}</span><span>started <b>${esc(run.live.started.slice(11,16))}</b>, ${run.live.done} node${run.live.done===1?"":"s"} done${run.live.state==="in progress"?" — reload for more":""}</span><span class="muted">·</span>`:"")+
+ (run.finished?`<span>Last full run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>');
  render();}
 function render(){
  $("#rows").innerHTML=data.nodes.map((n,i)=>editing===i?`
