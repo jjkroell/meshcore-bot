@@ -341,9 +341,12 @@ def last_run() -> dict:
             cur["ended"] = True
     finished = next((r for r in reversed(runs) if r["done"]), None)
     out: dict = {"nodes": {}}
+    # Each node's most recent result from any run in the tail, so a manual
+    # run of a few nodes doesn't blank the others.
+    for r in runs:
+        out["nodes"].update(r["nodes"])
     if finished:
         out.update(finished["done"])
-        out["nodes"] = dict(finished["nodes"])
     latest = runs[-1] if runs else None
     if latest and latest is not finished and latest["started"]:
         out["live"] = {
@@ -353,6 +356,8 @@ def last_run() -> dict:
         }
         for name, res in latest["nodes"].items():
             out["nodes"][name] = {**res, "current": True}
+    for res in out["nodes"].values():
+        res.setdefault("current", False)
     return out
 
 
@@ -633,14 +638,14 @@ function ago(ts){if(!ts)return '<span class="muted">never</span>';const h=(Date.
  const cls=h<=60?"ok":h<=24*7?"warn":"bad";return `<span class="${cls}">${t}</span>`;}
 function outcome(r){if(!r)return '<span class="muted">—</span>';
  const cls=/^(SUCCESS|AUTO_REBOOTED)$/.test(r.outcome)?"ok":r.outcome==="ALREADY_CURRENT"?"warn":"bad";
- return `<span class="chip ${cls}">${esc(r.outcome)}</span>`+(r.current?` <span class="small muted">${esc(r.at.slice(11,16))}</span>`:"")+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"");}
+ return `<span class="chip ${cls}">${esc(r.outcome)}</span>`+` <span class="small muted">${esc(r.current?r.at.slice(11,16):r.at.slice(5,16))}</span>`+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"");}
 async function load(){
  const r=await fetch("/api/nodes",{cache:"no-store"});const j=await r.json();
  if(!r.ok){msg(j.error,"err");return;}
  data=j;$("#cfg").textContent=j.config;
  const run=j.run;
  $("#run").innerHTML=(run.live?`<span class="chip ${run.live.state==="in progress"?"warn":"bad"}">${run.live.state==="in progress"?"Run in progress":"Run stopped early"}</span><span>started <b>${esc(run.live.started.slice(11,16))}</b>, ${run.live.done} node${run.live.done===1?"":"s"} done${run.live.state==="in progress"?" — reload for more":""}</span><span class="muted">·</span>`:"")+
- (run.finished?`<span>Last full run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>');
+ (run.finished?`<span>Last finished run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>');
  render();}
 function render(){
  $("#rows").innerHTML=data.nodes.map((n,i)=>editing===i?`

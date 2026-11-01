@@ -6,6 +6,9 @@
 # wrapper stops the bot for the duration of the run to get exclusive serial
 # access, then hands the radio back. The bot is restarted no matter how this
 # script exits (trap on EXIT).
+#
+# Extra arguments go to clock_sync.py, e.g. a manual run of two nodes:
+#   run-clock-sync.sh --only "KOD - Little Mountain" --only "KOD - Mt Shepherd"
 set -u
 
 LOG=/var/log/clock_sync/clock_sync.log
@@ -23,7 +26,7 @@ trap 'log "restarting meshcore-bot"; systemctl start meshcore-bot' EXIT
 
 sleep 3  # let the kernel release /dev/ttyACM*
 
-timeout "$MAX_SECONDS" "$PY" "$SCRIPT" --config "$CONFIG" --log-file "$LOG"
+timeout "$MAX_SECONDS" "$PY" "$SCRIPT" --config "$CONFIG" --log-file "$LOG" "$@"
 rc=$?
 log "clock_sync.py exited rc=$rc"
 exit "$rc"

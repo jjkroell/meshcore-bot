@@ -607,17 +607,46 @@ def configure_logging(log_file: Optional[str]) -> None:
     )
 
 
+def select_nodes(nodes: list[dict], wanted: list[str]) -> list[dict]:
+    """The configured nodes named by --only, in config order. Each value must
+    match at least one node, by name (case-insensitive) or as a prefix of its
+    pubkey_prefix, so a typo stops the run instead of silently syncing nothing."""
+    picked: list[dict] = []
+    for w in wanted:
+        w_name, w_key = w.strip().lower(), w.strip().lower().replace(" ", "")
+        hits = [
+            n for n in nodes
+            if str(n.get("name") or "").strip().lower() == w_name
+            or (w_key and str(n.get("pubkey_prefix") or "").lower().startswith(w_key))
+            or (len(w_key) >= 6 and str(n.get("pubkey_prefix") or "") and w_key.startswith(str(n.get("pubkey_prefix")).lower()))
+        ]
+        if not hits:
+            names = ", ".join(str(n.get("name")) for n in nodes)
+            raise SystemExit(f"--only {w!r} matches no configured node (have: {names})")
+        picked.extend(h for h in hits if not any(h is p for p in picked))
+    return [n for n in nodes if any(n is p for p in picked)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config", default="/etc/clock_sync/clock_sync.yaml", help="Path to config YAML"
     )
     parser.add_argument("--log-file", default=None, help="Optional log file path")
+    parser.add_argument(
+        "--only", action="append", default=[], metavar="NODE",
+        help="Sync only this node: its name (case-insensitive) or the start of its "
+             "pubkey_prefix. Repeat for several. Default: every configured node.",
+    )
     args = parser.parse_args()
 
     configure_logging(args.log_file)
 
     cfg = load_config(args.config)
+    if args.only:
+        cfg["repeaters"] = select_nodes(cfg["repeaters"], args.only)
+        logger.info("Manual run of %d node(s): %s", len(cfg["repeaters"]),
+                    ", ".join(n.get("name") or n.get("pubkey_prefix") or "?" for n in cfg["repeaters"]))
     started = time.time()
     results = asyncio.run(run(cfg))
     elapsed = time.time() - started
