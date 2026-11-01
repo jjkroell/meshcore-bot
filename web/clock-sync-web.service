@@ -1,0 +1,27 @@
+[Unit]
+Description=Clock sync node editor (web UI on :8090)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=clocksync-web
+Group=clocksync-web
+ExecStart=/opt/clock_sync/venv/bin/python /opt/clock_sync_web/clock_sync_web.py --port 8090
+Restart=on-failure
+RestartSec=5
+# Only /etc/clock_sync is writable (the config, its backups, the auth file).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/clock_sync
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
