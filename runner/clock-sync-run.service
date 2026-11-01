@@ -1,0 +1,8 @@
+[Unit]
+Description=Clock sync run requested from the web page
+
+[Service]
+Type=oneshot
+ExecStart=/opt/clock_sync_web/clock-sync-run-request.sh
+# The wrapper caps a run at 40 min; leave room for stopping/starting the bot.
+TimeoutStartSec=50min

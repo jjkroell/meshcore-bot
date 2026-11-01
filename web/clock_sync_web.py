@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import base64
 import difflib
+import fcntl
 import getpass
 import hashlib
 import hmac
@@ -52,6 +53,8 @@ AUTH_FILE = "/etc/clock_sync/web_auth.json"
 STATE_FILE = "/opt/clock_sync/state.json"
 SYNC_LOG = "/var/log/clock_sync/clock_sync.log"
 BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
+RUN_REQUEST = "/etc/clock_sync/run-request"  # picked up by clock-sync-run.path (root)
+RUN_LOCK = "/run/clock_sync.lock"  # held by run-clock-sync.sh for the whole run
 KEEP_BACKUPS = 30
 MIN_KEY_HEX = 6  # clock_sync matches contacts by public-key prefix; 3 bytes is the house style
 
@@ -405,6 +408,32 @@ def known_matches(prefix: str) -> list[str]:
     return sorted(set(names.values())) if len(names) > 1 else []
 
 
+def run_in_progress() -> bool:
+    """Whether run-clock-sync.sh (cron, manual or ours) holds its lock."""
+    try:
+        fd = os.open(RUN_LOCK, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def request_run(names: list[str]) -> None:
+    """Drop a run request for the root path unit: one node name per line,
+    empty for every node."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(RUN_REQUEST), prefix=".run-request.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("".join(n + "\n" for n in names))
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, RUN_REQUEST)
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -486,6 +515,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(500, {"error": f"can't read {CONFIG}: {e}"})
             state = load_state()
             run = last_run()
+            running = run_in_progress()
+            if run.get("live", {}).get("state") == "in progress" and not running:
+                run["live"]["state"] = "stopped early"  # no lock held: it isn't running
             nodes = []
             for i, r in enumerate(cfg["repeaters"]):
                 key = str(r.get("pubkey_prefix") or "").lower()
@@ -502,6 +534,7 @@ class Handler(BaseHTTPRequestHandler):
                     "last_run": run.get("nodes", {}).get(r.get("name") or key),
                 })
             self._json(200, {"version": version_of(text), "nodes": nodes,
+                             "running": running, "requested": os.path.exists(RUN_REQUEST),
                              "run": {k: v for k, v in run.items() if k != "nodes"},
                              "config": CONFIG})
         elif url.path == "/api/suggest":
@@ -517,7 +550,10 @@ class Handler(BaseHTTPRequestHandler):
         # with it needs a preflight we never answer.
         if self.headers.get("X-Clock-Sync") != "1":
             return self._json(403, {"error": "missing request header"})
-        if urlparse(self.path).path != "/api/save":
+        path = urlparse(self.path).path
+        if path == "/api/run":
+            return self._run()
+        if path != "/api/save":
             return self._send(404, b"Not found\n", "text/plain")
         try:
             n = int(self.headers.get("Content-Length", "0"))
@@ -550,6 +586,36 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(e)})
 
 
+def _run_handler(self):
+    """POST /api/run {nodes: [names]} - [] or missing = every node."""
+    try:
+        n = int(self.headers.get("Content-Length", "0"))
+        if n > 20_000:
+            raise ValueError("request too large")
+        body = json.loads(self.rfile.read(n) or b"{}")
+        wanted = body.get("nodes") or []
+        if not isinstance(wanted, list) or not all(isinstance(x, str) for x in wanted):
+            raise ValueError("nodes must be a list of names")
+        with _lock:
+            _, cfg, _ = read_config()
+            names = {str(r.get("name") or "") for r in cfg["repeaters"]}
+            unknown = [x for x in wanted if x not in names]
+            if unknown:
+                raise ValueError(f"not on the list: {', '.join(unknown)}; reload the page")
+            if run_in_progress() or os.path.exists(RUN_REQUEST):
+                return self._json(409, {"error": "a clock sync is already running or starting"})
+            request_run(sorted(set(wanted), key=wanted.index))
+        self.log_message("run requested: %s", ", ".join(wanted) or "all nodes")
+        self._json(200, {"ok": True})
+    except ValueError as e:
+        self._json(400, {"error": str(e)})
+    except (ConfigError, yaml.YAMLError, OSError) as e:
+        self._json(500, {"error": str(e)})
+
+
+Handler._run = _run_handler
+
+
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -564,6 +630,7 @@ h1{font-size:22px;margin:0 0 4px}
 .sub{color:var(--muted);margin:0 0 18px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:16px}
 .run{display:flex;gap:18px;flex-wrap:wrap;align-items:baseline}
+.runbar{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .run b{font-size:18px}
 table{width:100%;border-collapse:collapse}
 th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);text-align:left;font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
@@ -606,7 +673,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 <h1>Clock sync nodes</h1>
 <p class="sub">Repeaters the 04:00 clock sync logs into (every other day). Changes save straight to <code id="cfg"></code> and apply from the next run.</p>
 <div id="msg" class="msg"></div>
-<div class="card run" id="run"><span class="muted">Loading…</span></div>
+<div class="card runbar"><div class="run" id="run"><span class="muted">Loading…</span></div>
+ <button class="primary" id="runall">Run all now</button></div>
 
 <div class="card">
  <label for="q">Find a repeater the bot has heard</label>
@@ -658,7 +726,21 @@ function render(){
  <tr><td><b>${esc(n.name)}</b>${n.own_password?' <span class="chip" title="This node has its own admin password">own password</span>':""}${n.hidden.length?`<div class="small muted">+ ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td><code title="${esc(n.pubkey)}">${esc(n.pubkey.length>16?n.pubkey.slice(0,16)+"…":n.pubkey)}</code></td>
  <td>${ago(n.last_success)}</td><td>${outcome(n.last_run)}</td>
- <td class="actions"><button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`).join("");}
+ <td class="actions"><button class="runone" onclick="runNow([data.nodes[${i}].name])" ${busy()?"disabled":""}>Run</button> <button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`).join("");
+ $("#runall").disabled=busy();$("#runall").textContent=data.requested?"Starting…":data.running?"Running…":"Run all now";
+ clearTimeout(poll);if(busy())poll=setTimeout(()=>load().catch(()=>{}),10000);}
+let poll=null;
+const busy=()=>!!(data&&(data.running||data.requested));
+async function runNow(names){
+ const what=names.length?names.join(", "):`all ${data.nodes.length} nodes`;
+ const mins=Math.max(1,Math.round((names.length||data.nodes.length)*50/60));
+ if(!confirm(`Run the clock sync now for ${what}?\n\nThe bot goes offline while it runs (about ${mins} min).`))return;
+ const r=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json","X-Clock-Sync":"1"},body:JSON.stringify({nodes:names})});
+ const j=await r.json().catch(()=>({error:"bad response"}));
+ if(!r.ok){msg(j.error||("HTTP "+r.status),"err");return;}
+ msg(`Clock sync started for ${what}. Results appear below as each node finishes.`,"info");
+ data.requested=true;render();setTimeout(()=>load().catch(()=>{}),3000);}
+$("#runall").onclick=()=>runNow([]);
 async function save(nodes,okText){
  const r=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json","X-Clock-Sync":"1"},
   body:JSON.stringify({version:data.version,nodes})});

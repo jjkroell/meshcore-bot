@@ -20,6 +20,16 @@ MAX_SECONDS=2400  # hard cap: 14 nodes * (~40s timeouts + 30s delay) worst case
 mkdir -p "$(dirname "$LOG")"
 log() { echo "$(date -Is) run-clock-sync: $*" >>"$LOG"; }
 
+# One run at a time: cron, a manual run and the web page's "Run now" must
+# never share the radio. The web page tests this lock to show "running".
+LOCK=/run/clock_sync.lock
+exec 9>>"$LOCK"
+chmod 644 "$LOCK"
+if ! flock -n 9; then
+    log "another clock sync is already running - not starting this one"
+    exit 75
+fi
+
 log "stopping meshcore-bot"
 systemctl stop meshcore-bot
 trap 'log "restarting meshcore-bot"; systemctl start meshcore-bot' EXIT
