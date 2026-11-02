@@ -64,6 +64,14 @@ class SyncResult:
     offset: Optional[float] = None  # node clock minus ours at login, seconds (+ = node ahead)
 
 
+def log_result(result: "SyncResult") -> None:
+    """`Name: OUTCOME (detail)`, or `Name: OUTCOME` - the web page parses both."""
+    if result.detail:
+        logger.info("%s: %s (%s)", result.node, result.outcome, result.detail)
+    else:
+        logger.info("%s: %s", result.node, result.outcome)
+
+
 def load_config(path: str) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f) or {}
@@ -384,7 +392,7 @@ async def _handle_already_current(
             label,
             Outcome.SUCCESS,
             f"{text} - issued clkreboot (last OK: {last_ok}), resynced "
-            f"{clkreboot_retry_delay:.0f}s after reboot ({retry_detail})",
+            f"{clkreboot_retry_delay:.0f}s after reboot" + (f" ({retry_detail})" if retry_detail else ""),
         )
 
     return SyncResult(
@@ -470,7 +478,7 @@ async def _login_and_sync(
         # an ERR condition - a successful `clock sync` is silent. Login just
         # proved a real round trip to this node, so silence here means the
         # command applied cleanly, not that the node is unreachable.
-        return Outcome.SUCCESS, "no explicit ack (normal - firmware is silent on success)"
+        return Outcome.SUCCESS, ""
 
     text = (reply.payload.get("text") or "").strip()
     if "clock cannot go backwards" in text.lower():
@@ -551,7 +559,8 @@ async def _sync_found(
     offset = meas.get("offset")
     if offset is not None:
         result.offset = offset
-        result.detail = f"{peer_parse.fmt_offset(offset)} ({'ahead' if offset > 0 else 'behind'}) - {result.detail}"
+        off = f"{peer_parse.fmt_offset(offset)} ({'ahead' if offset > 0 else 'behind'})"
+        result.detail = f"{off} - {result.detail}" if result.detail else off
         if result.outcome == Outcome.SUCCESS and pubkey_prefix in state:
             state[pubkey_prefix]["last_offset_s"] = round(offset, 1)
     return result
@@ -661,7 +670,7 @@ async def run(cfg: dict) -> list[SyncResult]:
                         f"{(time.time() - ts) / 3600:.1f} h ago" + (f", {hit['note']}" if hit["note"] else ""),
                     )
                     results.append(result)
-                    logger.info("%s: %s (%s)", result.node, result.outcome, result.detail)
+                    log_result(result)
                     continue  # nothing sent, so no delay before the next node
             node_password = node_cfg.get("admin_password", admin_password)
             result = await sync_one(
@@ -679,7 +688,7 @@ async def run(cfg: dict) -> list[SyncResult]:
                 bot_db,
             )
             results.append(result)
-            logger.info("%s: %s (%s)", result.node, result.outcome, result.detail)
+            log_result(result)
             save_state(state_file, state)  # after every node, not just at the end - durable across crashes
 
             if channel_idx is not None:

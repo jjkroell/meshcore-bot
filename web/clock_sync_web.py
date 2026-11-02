@@ -308,7 +308,10 @@ def load_state() -> dict:
         return {}
 
 
-RESULT_RE = re.compile(r"^(\S+ \S+) INFO clock_sync: (.+?): ([A-Z_]+) \((.*)\)\s*$")
+OUTCOMES = "SUCCESS|LOGIN_FAILED|LOGIN_TIMEOUT|ALREADY_CURRENT|AUTO_REBOOTED|CMD_ERROR|SEND_FAILED|CONTACT_NOT_FOUND|SKIPPED_PEER"
+RESULT_RE = re.compile(r"^(\S+ \S+) INFO clock_sync: (.+?): (" + OUTCOMES + r")(?: \((.*)\))?\s*$")
+# Written on every silent success before 2026-11-02; not worth showing.
+NOISE_RE = re.compile(r"\s*(?:- )?no explicit ack \(normal - firmware is silent on success\)\s*")
 DONE_RE = re.compile(r"^(\S+ \S+) INFO clock_sync: Done in ([\d.]+)s: (\d+)/(\d+) succeeded")
 
 
@@ -347,7 +350,9 @@ def last_run() -> dict:
             runs.append(cur)
         r = RESULT_RE.match(l)
         if r:
-            cur["nodes"][r.group(2)] = {"outcome": r.group(3), "detail": r.group(4), "at": r.group(1)[:19]}
+            detail = NOISE_RE.sub(" ", r.group(4) or "").strip(" -")
+            detail = re.sub(r"\(\s*\)", "", detail).strip()
+            cur["nodes"][r.group(2)] = {"outcome": r.group(3), "detail": detail, "at": r.group(1)[:19]}
         d = DONE_RE.match(l)
         if d:
             cur["done"] = {"finished": d.group(1)[:19], "ok": int(d.group(3)), "total": int(d.group(4))}
