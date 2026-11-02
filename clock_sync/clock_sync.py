@@ -60,6 +60,7 @@ class SyncResult:
     node: str
     outcome: str
     detail: str = ""
+    offset: Optional[float] = None  # node clock minus ours at login, seconds (+ = node ahead)
 
 
 def load_config(path: str) -> dict:
@@ -259,7 +260,7 @@ def format_post(label: str, key: str, outcome: str, detail: str = "") -> str:
         name = name[:-1]
     msg = (name.rstrip() or "?") + tail
     if detail:
-        extra = f" - {detail}"
+        extra = f" {detail}" if detail.startswith("(") else f" - {detail}"
         room = CHAN_MSG_MAX_BYTES - len(msg.encode())
         if len(extra.encode()) > room:
             raw = extra.encode()[: max(0, room - 3)]
@@ -400,8 +401,15 @@ async def _login_and_sync(
     admin_password: str,
     login_timeout: float,
     reply_timeout: float,
+    meas: Optional[dict] = None,
 ) -> tuple[str, str]:
     """Log in and send a single `clock sync`. Returns (outcome, detail).
+
+    meas, if given, gets "offset": how far the node's clock was off before the
+    sync. The login reply carries the node's own clock (server_timestamp,
+    companion firmware >= 1.10, meshcore lib >= 2.3.17); it was stamped
+    somewhere between our request going out and the reply coming back, so
+    compare it with the midpoint - that cancels most of the mesh transit time.
 
     outcome is one of Outcome.SUCCESS / LOGIN_FAILED / LOGIN_TIMEOUT /
     SEND_FAILED / CMD_ERROR, or the sentinel "BACKWARDS" for a "clock cannot
@@ -419,6 +427,7 @@ async def _login_and_sync(
     # public send_login(), which is otherwise identical but logs a
     # "consider using send_login_sync" WARNING on every single call - once per
     # node per run, it was the bulk of the log's noise.
+    t_sent = time.time()
     send_result = await mc.commands._send_login_raw(contact, admin_password)
     if send_result is None or send_result.type == EventType.ERROR:
         detail = str(send_result.payload) if send_result else "no send confirmation"
@@ -437,7 +446,9 @@ async def _login_and_sync(
         t.cancel()
 
     if success_task in done and success_task.result() is not None:
-        pass  # logged in
+        server_ts = (success_task.result().payload or {}).get("server_timestamp")
+        if meas is not None and isinstance(server_ts, int) and server_ts > 0:
+            meas["offset"] = server_ts - (t_sent + time.time()) / 2
     elif failed_task in done and failed_task.result() is not None:
         return Outcome.LOGIN_FAILED, "explicit rejection (bad admin password)"
     else:
@@ -528,10 +539,27 @@ async def _sync_found(
         # trust a possibly-dead cached hop.
         await mc.commands.reset_path(contact)
 
+    meas: dict = {}
     outcome, detail = await _login_and_sync(
-        mc, contact, pubkey_prefix, admin_password, login_timeout, reply_timeout
+        mc, contact, pubkey_prefix, admin_password, login_timeout, reply_timeout, meas
     )
+    result = await _finish(
+        mc, contact, pubkey_prefix, label, outcome, detail, state, auto_clkreboot, clkreboot_min_hours,
+        admin_password, login_timeout, reply_timeout, clkreboot_retry_delay,
+    )
+    offset = meas.get("offset")
+    if offset is not None:
+        result.offset = offset
+        result.detail = f"{peer_parse.fmt_offset(offset)} ({'ahead' if offset > 0 else 'behind'}) - {result.detail}"
+        if result.outcome == Outcome.SUCCESS and pubkey_prefix in state:
+            state[pubkey_prefix]["last_offset_s"] = round(offset, 1)
+    return result
 
+
+async def _finish(
+    mc, contact, pubkey_prefix, label, outcome, detail, state, auto_clkreboot, clkreboot_min_hours,
+    admin_password, login_timeout, reply_timeout, clkreboot_retry_delay,
+) -> SyncResult:
     if outcome == "BACKWARDS":
         return await _handle_already_current(
             mc,
@@ -657,6 +685,8 @@ async def run(cfg: dict) -> list[SyncResult]:
                 contact = find_contact(mc, node_cfg)
                 key = (contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")).lower()
                 detail = result.detail if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED) else ""
+                if result.offset is not None:  # `Name [key]: SUCCESS (5s off)`, as PMD-TimeSync does
+                    detail = f"({peer_parse.fmt_offset(result.offset)})" + (f" {detail.split(' - ', 1)[-1]}" if detail else "")
                 await mc.commands.send_chan_msg(channel_idx, format_post(result.node, key, result.outcome, detail))
 
             if i < len(nodes) - 1:

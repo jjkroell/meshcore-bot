@@ -113,3 +113,16 @@ def latest_for(successes: list[dict], node_key: str) -> Optional[dict]:
         if key_matches(s["key"], node_key) and (best is None or s["ts"] > best["ts"]):
             best = s
     return best
+
+
+def fmt_offset(seconds: float) -> str:
+    """How far a clock was off, PMD-TimeSync style: '5s off', '12m off', '3h off', '540d off'."""
+    a = abs(seconds)
+    if a < 90:
+        return f"{a:.0f}s off"
+    if a < 90 * 60:
+        return f"{a / 60:.0f}m off"
+    if a < 36 * 3600:
+        return f"{a / 3600:.0f}h off"
+    return f"{a / 86400:.0f}d off"
+

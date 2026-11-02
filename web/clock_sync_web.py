@@ -630,7 +630,9 @@ class Handler(BaseHTTPRequestHandler):
                 # Who synced it last: this bot (state.json) or a peer (its #time-sync posts).
                 by = None
                 if st and st.get("last_success_ts"):
-                    by = {"bot": me, "ts": st["last_success_ts"], "peer": False}
+                    off = st.get("last_offset_s")
+                    by = {"bot": me, "ts": st["last_success_ts"], "peer": False,
+                          "note": peer_parse.fmt_offset(off) if isinstance(off, (int, float)) else ""}
                 peer = peer_parse.latest_for(peer_ok, key)
                 if peer and (by is None or peer["ts"] > by["ts"]):
                     by = {"bot": peer["sender"], "ts": peer["ts"], "peer": True, "note": peer["note"]}
