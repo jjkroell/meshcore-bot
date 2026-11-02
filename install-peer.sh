@@ -61,5 +61,5 @@ sleep 3
 systemctl is-active clock-sync-web
 /opt/clock_sync/venv/bin/python -I -c "import sys; sys.path.insert(0, '/opt/clock_sync'); import clock_sync, peer_parse; print('clock_sync imports OK')"
 journalctl -u clock-sync-web --since "-10s" --no-pager -o cat | grep -v '"GET' | tail -5
-echo "Done. Reload http://192.168.102.39:8090 - 'Last synced by' under each node's last run, #time-sync card at the bottom."
+echo "Done. Reload http://<this Pi>:8090 - 'Last synced by' under each node's last run, #time-sync card at the bottom."
 echo "Backups: *.before-peer-$STAMP (in /opt/clock_sync, /opt/clock_sync_web, /root)"
