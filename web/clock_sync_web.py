@@ -47,6 +47,14 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+# peer_parse.py lives with clock_sync.py, so the page and the run read the
+# other bot's posts the same way. (../clock_sync is the source tree layout.)
+for _d in ("/opt/clock_sync", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "clock_sync")):
+    if os.path.exists(os.path.join(_d, "peer_parse.py")):
+        sys.path.insert(0, _d)
+        break
+import peer_parse  # noqa: E402
+
 CONFIG = "/etc/clock_sync/clock_sync.yaml"
 BACKUP_DIR = "/etc/clock_sync/backups"
 AUTH_FILE = "/etc/clock_sync/web_auth.json"
@@ -55,6 +63,8 @@ SYNC_LOG = "/var/log/clock_sync/clock_sync.log"
 BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
 RUN_REQUEST = "/etc/clock_sync/run-request"  # picked up by clock-sync-run.path (root)
 RUN_LOCK = "/run/clock_sync.lock"  # held by run-clock-sync.sh for the whole run
+ARCHIVE_DB = "/var/lib/clock-sync-web/messages.db"  # our permanent copy of the bot's message log
+ARCHIVE_EVERY = 60  # seconds
 KEEP_BACKUPS = 30
 MIN_KEY_HEX = 6  # clock_sync matches contacts by public-key prefix; 3 bytes is the house style
 
@@ -424,6 +434,89 @@ def run_in_progress() -> bool:
         os.close(fd)
 
 
+# --------------------------------------------------------------------------
+# Message archive + the other time-sync bot(s)
+# --------------------------------------------------------------------------
+# meshcore-bot logs every message it hears to message_stats but deletes rows
+# older than 7 days. Copy them here, keyed by its row id, so nothing is lost.
+
+def _archive_con() -> sqlite3.Connection:
+    con = sqlite3.connect(ARCHIVE_DB, timeout=10)
+    con.execute("""CREATE TABLE IF NOT EXISTS messages (
+        bot_id INTEGER PRIMARY KEY,   -- message_stats.id in the bot's database
+        received_at INTEGER,          -- when the bot heard it (unix, bot clock)
+        sent_ts INTEGER,              -- the sender's own timestamp
+        sender TEXT, channel TEXT, content TEXT, is_dm INTEGER,
+        hops INTEGER, snr REAL, rssi INTEGER, path TEXT)""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_msg_chan_time ON messages(channel, received_at)")
+    return con
+
+
+def archive_once() -> int:
+    con = _archive_con()
+    try:
+        last = con.execute("SELECT COALESCE(MAX(bot_id), 0) FROM messages").fetchone()[0]
+        # immutable: the bot's DB is WAL and this user can't create its -shm, so
+        # mode=ro fails. An immutable read can lag the WAL, so re-scan the last
+        # 500 ids each pass; INSERT OR IGNORE keeps that free of duplicates.
+        src = sqlite3.connect(f"file:{BOT_DB}?immutable=1", uri=True, timeout=5)
+        try:
+            rows = src.execute(
+                "SELECT id, CAST(strftime('%s', created_at) AS INTEGER), timestamp, sender_id, channel, content, "
+                "is_dm, hops, snr, rssi, path FROM message_stats WHERE id > ? ORDER BY id LIMIT 5000", (max(0, last - 500),)
+            ).fetchall()
+        finally:
+            src.close()
+        before = con.total_changes
+        con.executemany("INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+        return con.total_changes - before
+    finally:
+        con.close()
+
+
+def archiver() -> None:
+    while True:
+        try:
+            n = archive_once()
+            if n:
+                sys.stderr.write(f"archived {n} message(s)\n")
+        except sqlite3.Error as e:
+            sys.stderr.write(f"message archive: {e}\n")
+        time.sleep(ARCHIVE_EVERY)
+
+
+def channel_messages(channel: str, since_days: float = 60, limit: int = 2000) -> list[tuple]:
+    """(received_at, sender, channel, content) on `channel`, newest first: the archive,
+    topped up from the bot's database for anything not archived yet."""
+    if not channel:
+        return []
+    chans = sorted({channel.lower(), channel.lower().lstrip("#"), "#" + channel.lower().lstrip("#")})
+    q = ",".join("?" * len(chans))
+    since = int(time.time() - since_days * 86400)
+    seen: dict[int, tuple] = {}
+    for db, sql in (
+        (f"file:{ARCHIVE_DB}?mode=ro",
+         f"SELECT bot_id, COALESCE(received_at, sent_ts), sender, channel, content FROM messages "
+         f"WHERE is_dm = 0 AND lower(channel) IN ({q}) AND COALESCE(received_at, sent_ts) >= ? "
+         f"ORDER BY bot_id DESC LIMIT {limit}"),
+        (f"file:{BOT_DB}?immutable=1",
+         f"SELECT id, COALESCE(CAST(strftime('%s', created_at) AS INTEGER), timestamp), sender_id, channel, content "
+         f"FROM message_stats WHERE is_dm = 0 AND lower(channel) IN ({q}) AND timestamp >= ? "
+         f"ORDER BY id DESC LIMIT {limit}"),
+    ):
+        try:
+            con = sqlite3.connect(db, uri=True, timeout=3)
+            try:
+                for bid, ts, sender, ch, content in con.execute(sql, (*chans, since)):
+                    seen.setdefault(bid, (ts or 0, sender or "", ch or "", content or ""))
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass
+    return [seen[k] for k in sorted(seen, reverse=True)]
+
+
 def request_run(names: list[str]) -> None:
     """Drop a run request for the root path unit: one node name per line,
     empty for every node."""
@@ -518,25 +611,44 @@ class Handler(BaseHTTPRequestHandler):
             running = run_in_progress()
             if run.get("live", {}).get("state") == "in progress" and not running:
                 run["live"]["state"] = "stopped early"  # no lock held: it isn't running
+            channel = str(cfg.get("summary_channel") or "")
+            peers = cfg.get("peer_bots") or []
+            peers = [peers] if isinstance(peers, str) else [str(p) for p in peers]
+            msgs = channel_messages(channel)
+            try:
+                index = peer_parse.name_index(f"file:{BOT_DB}?immutable=1")
+            except sqlite3.Error:
+                index = {}
+            peer_ok = peer_parse.peer_successes(msgs, peers, channel, index)
+            me = str(cfg.get("bot_name") or "this bot")
             nodes = []
             for i, r in enumerate(cfg["repeaters"]):
                 key = str(r.get("pubkey_prefix") or "").lower()
                 # state.json is keyed by the first 12 hex of the full key.
                 st = max((v for k, v in state.items() if key and (k.startswith(key) or key.startswith(k))),
                          key=lambda v: v.get("last_success_ts") or 0, default=None)
+                # Who synced it last: this bot (state.json) or a peer (its #time-sync posts).
+                by = None
+                if st and st.get("last_success_ts"):
+                    by = {"bot": me, "ts": st["last_success_ts"], "peer": False}
+                peer = peer_parse.latest_for(peer_ok, key)
+                if peer and (by is None or peer["ts"] > by["ts"]):
+                    by = {"bot": peer["sender"], "ts": peer["ts"], "peer": True, "note": peer["note"]}
                 nodes.append({
                     "id": i,
                     "name": r.get("name") or "",
                     "pubkey": key,
                     "own_password": "admin_password" in r,  # never the value itself
                     "hidden": sorted(k for k in r if k not in ("name", "pubkey_prefix", "admin_password")),
-                    "last_success": (st or {}).get("last_success_ts"),
+                    "last_success": by["ts"] if by else None,
+                    "last_by": by,
                     "last_run": run.get("nodes", {}).get(r.get("name") or key),
                 })
             self._json(200, {"version": version_of(text), "nodes": nodes,
                              "running": running, "requested": os.path.exists(RUN_REQUEST),
                              "run": {k: v for k, v in run.items() if k != "nodes"},
-                             "config": CONFIG})
+                             "config": CONFIG, "channel": channel, "peers": peers, "me": me,
+                             "channel_msgs": [{"ts": ts, "sender": s, "text": c} for ts, s, _, c in msgs[:25]]})
         elif url.path == "/api/suggest":
             q = parse_qs(url.query).get("q", [""])[0]
             self._json(200, {"results": suggest(q)})
@@ -671,7 +783,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 </style></head>
 <body><main>
 <h1>Clock sync nodes</h1>
-<p class="sub">Repeaters the 04:00 clock sync logs into (every other day). Changes save straight to <code id="cfg"></code> and apply from the next run.</p>
+<p class="sub">Repeaters the 04:00 clock sync logs into (every other day). A node another time-sync bot reported synced in the last day is skipped on the scheduled run. Changes save straight to <code id="cfg"></code> and apply from the next run.</p>
 <div id="msg" class="msg"></div>
 <div class="card runbar"><div class="run" id="run"><span class="muted">Loading…</span></div>
  <button class="primary" id="runall">Run all now</button></div>
@@ -694,6 +806,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 <table><thead><tr><th>Node</th><th>Public key</th><th>Last success</th><th>Last run</th><th></th></tr></thead>
 <tbody id="rows"></tbody></table>
 </div>
+<div class="card" id="chan" style="display:none"><div class="runbar"><b id="chanh"></b><span class="small muted" id="chanp"></span></div>
+<div id="chanl" class="small" style="margin-top:8px"></div></div>
 <p class="small muted">Keys are matched by prefix against the companion radio's contact list. When the radio has lost a repeater (meshcore-bot purges them when its contact list fills), the clock sync re-adds it from the bot's database first. That needs a prefix matching exactly one repeater the bot has heard, or the full 64-hex key. <b>CONTACT_NOT_FOUND</b> now means it couldn't, and the detail says why. Entries not changed here keep their exact text in the file, and a backup is kept on every save.</p>
 </main>
 <script>
@@ -704,9 +818,14 @@ function msg(t,kind){const m=$("#msg");m.textContent=t||"";m.className="msg"+(t?
 function ago(ts){if(!ts)return '<span class="muted">never</span>';const h=(Date.now()/1000-ts)/3600;
  const t=h<1?Math.round(h*60)+" min ago":h<48?Math.round(h)+" h ago":Math.round(h/24)+" days ago";
  const cls=h<=60?"ok":h<=24*7?"warn":"bad";return `<span class="${cls}">${t}</span>`;}
-function outcome(r){if(!r)return '<span class="muted">—</span>';
- const cls=/^(SUCCESS|AUTO_REBOOTED)$/.test(r.outcome)?"ok":r.outcome==="ALREADY_CURRENT"?"warn":"bad";
- return `<span class="chip ${cls}">${esc(r.outcome)}</span>`+` <span class="small muted">${esc(r.current?r.at.slice(11,16):r.at.slice(5,16))}</span>`+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"");}
+function when(ts){const d=new Date(ts*1000),now=new Date();const hm=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",hour12:false});
+ return d.toDateString()===now.toDateString()?"today "+hm:d.toLocaleDateString([],{month:"short",day:"numeric"})+" "+hm;}
+function lastBy(b){if(!b)return "";
+ return `<div class="small" style="margin-top:3px">Last synced by <b class="${b.peer?"":"ok"}">${esc(b.bot)}</b> <span class="muted">· ${esc(when(b.ts))}${b.note?" · "+esc(b.note):""}</span></div>`;}
+function outcome(r,b){if(!r)return '<span class="muted">—</span>'+lastBy(b);
+ const cls=/^(SUCCESS|AUTO_REBOOTED|SKIPPED_PEER)$/.test(r.outcome)?"ok":r.outcome==="ALREADY_CURRENT"?"warn":"bad";
+ const label=r.outcome==="SKIPPED_PEER"?"SKIPPED":r.outcome;
+ return `<span class="chip ${cls}">${esc(label)}</span>`+` <span class="small muted">${esc(r.current?r.at.slice(11,16):r.at.slice(5,16))}</span>`+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"")+lastBy(b);}
 async function load(){
  const r=await fetch("/api/nodes",{cache:"no-store"});const j=await r.json();
  if(!r.ok){msg(j.error,"err");return;}
@@ -714,6 +833,10 @@ async function load(){
  const run=j.run;
  $("#run").innerHTML=(run.live?`<span class="chip ${run.live.state==="in progress"?"warn":"bad"}">${run.live.state==="in progress"?"Run in progress":"Run stopped early"}</span><span>started <b>${esc(run.live.started.slice(11,16))}</b>, ${run.live.done} node${run.live.done===1?"":"s"} done${run.live.state==="in progress"?" — reload for more":""}</span><span class="muted">·</span>`:"")+
  (run.finished?`<span>Last finished run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>');
+ if(j.channel){$("#chan").style.display="";$("#chanh").textContent=j.channel;
+  $("#chanp").textContent=j.peers.length?"Peer bot"+(j.peers.length>1?"s":"")+": "+j.peers.join(", ")+" — their OK / SUCCESS posts count for the skip":"No peer bots configured";
+  const pn=new Set(j.peers.map(p=>p.toLowerCase().replace(/[^0-9a-z]/g,"")));
+  $("#chanl").innerHTML=j.channel_msgs.length?j.channel_msgs.map(m=>`<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">${esc(when(m.ts))}</span> <b class="${pn.has(m.sender.toLowerCase().replace(/[^0-9a-z]/g,""))?"ok":""}">${esc(m.sender)}</b>: <code>${esc(m.text)}</code></div>`).join("")+'<div class="muted" style="padding-top:6px">Our own posts don\'t show here — the bot is offline while it sends them.</div>':'<span class="muted">Nothing heard on this channel yet.</span>';}
  render();}
 function render(){
  $("#rows").innerHTML=data.nodes.map((n,i)=>editing===i?`
@@ -725,7 +848,7 @@ function render(){
  <td class="actions"><button class="primary" onclick="saveEdit(${i})">Save</button> <button onclick="editing=null;render()">Cancel</button></td></tr>`:`
  <tr><td><b>${esc(n.name)}</b>${n.own_password?' <span class="chip" title="This node has its own admin password">own password</span>':""}${n.hidden.length?`<div class="small muted">+ ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td><code title="${esc(n.pubkey)}">${esc(n.pubkey.length>16?n.pubkey.slice(0,16)+"…":n.pubkey)}</code></td>
- <td>${ago(n.last_success)}</td><td>${outcome(n.last_run)}</td>
+ <td>${ago(n.last_success)}</td><td>${outcome(n.last_run,n.last_by)}</td>
  <td class="actions"><button class="runone" onclick="runNow([data.nodes[${i}].name])" ${busy()?"disabled":""}>Run</button> <button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`).join("");
  $("#runall").disabled=busy();$("#runall").textContent=data.requested?"Starting…":data.running?"Running…":"Run all now";
  clearTimeout(poll);if(busy())poll=setTimeout(()=>load().catch(()=>{}),10000);}
@@ -824,6 +947,10 @@ def main() -> int:
         print(f"No password set: run with --set-password first ({AUTH_FILE}).", file=sys.stderr)
         return 1
     read_config()  # fail fast if the file can't be handled
+    if os.path.isdir(os.path.dirname(ARCHIVE_DB)):
+        threading.Thread(target=archiver, daemon=True, name="archiver").start()
+    else:
+        print(f"No {os.path.dirname(ARCHIVE_DB)}: message archive off", file=sys.stderr)
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     print(f"clock-sync-web on http://{a.bind}:{a.port}/ editing {CONFIG}", flush=True)
     srv.serve_forever()

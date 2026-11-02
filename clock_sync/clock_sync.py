@@ -27,6 +27,8 @@ from typing import Any, Optional
 import yaml
 from meshcore import EventType, MeshCore
 
+import peer_parse  # next to this script
+
 logger = logging.getLogger("clock_sync")
 
 DEFAULT_LOGIN_TIMEOUT = 20
@@ -37,7 +39,8 @@ DEFAULT_STATE_FILE = "/opt/clock_sync/state.json"
 DEFAULT_BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
 DEFAULT_CLKREBOOT_MIN_HOURS = 12  # must be well under the ~48h run cadence
 DEFAULT_CLKREBOOT_RETRY_DELAY = 30  # seconds to let a node reboot before retrying `clock sync`
-CHAN_MSG_MAX_LEN = 140  # keep comfortably inside a single-packet channel message
+CHAN_MSG_MAX_BYTES = 120  # UTF-8 bytes; the radio prepends "<our name>: " inside a ~160-byte limit
+DEFAULT_PEER_SKIP_HOURS = 24
 
 
 class Outcome:
@@ -49,6 +52,7 @@ class Outcome:
     CMD_ERROR = "CMD_ERROR"
     SEND_FAILED = "SEND_FAILED"
     CONTACT_NOT_FOUND = "CONTACT_NOT_FOUND"
+    SKIPPED_PEER = "SKIPPED_PEER"  # another time-sync bot reported this node synced recently
 
 
 @dataclass
@@ -215,6 +219,53 @@ async def restore_contact(mc: MeshCore, node_cfg: dict, bot_db: str) -> tuple[Op
     logger.info("%s: re-added to the companion's contacts from %s (%s)",
                 node_cfg.get("name") or key, source, rec["public_key"][:12])
     return rec, source
+
+
+def load_peer_successes(bot_db: str, channel: str, peers: list[str], since_ts: float) -> list[dict]:
+    """Every node a peer bot reported synced OK on `channel` since `since_ts`
+    ({ts, sender, key, note}, see peer_parse). Read from meshcore-bot's
+    message_stats (it logs every channel message it hears, kept ~7 days); the
+    bot is stopped while this script runs, so the file is quiet."""
+    # mode=ro sees the WAL (root can create its -shm); immutable is the fallback.
+    for mode in ("mode=ro", "immutable=1"):
+        uri = f"file:{bot_db}?{mode}"
+        try:
+            con = sqlite3.connect(uri, uri=True, timeout=5)
+            try:
+                rows = con.execute(
+                    "SELECT COALESCE(CAST(strftime('%s', created_at) AS INTEGER), timestamp), sender_id, channel, content "
+                    "FROM message_stats WHERE is_dm = 0 AND timestamp >= ? ORDER BY id DESC",
+                    (int(since_ts) - 86400,),  # sender clocks drift; filter on receive time below
+                ).fetchall()
+            finally:
+                con.close()
+            index = peer_parse.name_index(uri)
+        except sqlite3.Error as e:
+            logger.warning("Couldn't read peer bot messages from %s (%s): %s", bot_db, mode, e)
+            continue
+        rows = [r for r in rows if (r[0] or 0) >= since_ts]
+        return peer_parse.peer_successes(rows, peers, channel, index)
+    return []
+
+
+def format_post(label: str, key: str, outcome: str, detail: str = "") -> str:
+    """Our #time-sync line, in the shared format both bots parse:
+    `<name> [<first 3 bytes of the key, 6 hex>]: <OUTCOME>[ - detail]`, kept under
+    CHAN_MSG_MAX_BYTES by trimming the detail, then the name - never the key."""
+    key = (key or "")[:6]
+    tail = f" [{key}]: {outcome}" if key else f": {outcome}"
+    name = label
+    while name and len((name + tail).encode()) > CHAN_MSG_MAX_BYTES:
+        name = name[:-1]
+    msg = (name.rstrip() or "?") + tail
+    if detail:
+        extra = f" - {detail}"
+        room = CHAN_MSG_MAX_BYTES - len(msg.encode())
+        if len(extra.encode()) > room:
+            raw = extra.encode()[: max(0, room - 3)]
+            extra = raw.decode("utf-8", "ignore") + "..." if room > 6 else ""
+        msg += extra
+    return msg
 
 
 async def find_or_create_channel(mc: MeshCore, name: str, scan_limit: int) -> Optional[int]:
@@ -524,6 +575,17 @@ async def run(cfg: dict) -> list[SyncResult]:
     # fills; put a configured one back (from the bot's database) when it's missing.
     restore_missing = cfg.get("restore_missing_contacts", True)
     bot_db = cfg.get("bot_db", DEFAULT_BOT_DB)
+    # Another time-sync bot on the same channel: skip a node it reported synced
+    # within peer_skip_hours (not on manual --only runs: those mean "do it now").
+    peers = cfg.get("peer_bots") or []
+    if isinstance(peers, str):
+        peers = [peers]
+    peer_skip_hours = float(cfg.get("peer_skip_hours", DEFAULT_PEER_SKIP_HOURS))
+    peer_successes: list = []
+    if peers and summary_channel and not cfg.get("_manual") and peer_skip_hours > 0:
+        peer_successes = load_peer_successes(bot_db, summary_channel, peers, time.time() - peer_skip_hours * 3600)
+        logger.info("Peer bots %s: %d node success(es) on %s in the last %g h",
+                    ", ".join(peers), len(peer_successes), summary_channel, peer_skip_hours)
     state = load_state(state_file)
 
     if transport == "serial":
@@ -558,6 +620,20 @@ async def run(cfg: dict) -> list[SyncResult]:
 
         nodes = cfg["repeaters"]
         for i, node_cfg in enumerate(nodes):
+            if peer_successes:
+                contact = find_contact(mc, node_cfg)
+                key = contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")
+                hit = peer_parse.latest_for(peer_successes, key)
+                if hit:
+                    ts = hit["ts"]
+                    result = SyncResult(
+                        node_cfg.get("name") or key or "?", Outcome.SKIPPED_PEER,
+                        f"synced by {hit['sender']} at {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))}, "
+                        f"{(time.time() - ts) / 3600:.1f} h ago" + (f", {hit['note']}" if hit["note"] else ""),
+                    )
+                    results.append(result)
+                    logger.info("%s: %s (%s)", result.node, result.outcome, result.detail)
+                    continue  # nothing sent, so no delay before the next node
             node_password = node_cfg.get("admin_password", admin_password)
             result = await sync_one(
                 mc,
@@ -578,12 +654,10 @@ async def run(cfg: dict) -> list[SyncResult]:
             save_state(state_file, state)  # after every node, not just at the end - durable across crashes
 
             if channel_idx is not None:
-                msg = f"{result.node}: {result.outcome}"
-                if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED):
-                    msg += f" - {result.detail}"
-                if len(msg) > CHAN_MSG_MAX_LEN:
-                    msg = msg[: CHAN_MSG_MAX_LEN - 3] + "..."
-                await mc.commands.send_chan_msg(channel_idx, msg)
+                contact = find_contact(mc, node_cfg)
+                key = (contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")).lower()
+                detail = result.detail if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED) else ""
+                await mc.commands.send_chan_msg(channel_idx, format_post(result.node, key, result.outcome, detail))
 
             if i < len(nodes) - 1:
                 await asyncio.sleep(delay)
@@ -591,6 +665,30 @@ async def run(cfg: dict) -> list[SyncResult]:
         await mc.disconnect()
 
     return results
+
+
+async def ensure_channel(cfg: dict) -> int:
+    name = cfg.get("summary_channel")
+    if not name:
+        logger.error("No summary_channel in the config")
+        return 1
+    companion = cfg.get("companion", {})
+    if str(companion.get("transport", "tcp")).lower() == "serial":
+        mc = await MeshCore.create_serial(companion.get("serial_port", "/dev/ttyACM0"),
+                                          companion.get("baudrate", 115200), default_timeout=10)
+    else:
+        mc = await MeshCore.create_tcp(companion.get("host", "127.0.0.1"), companion.get("port", 5001), default_timeout=10)
+    if mc is None:
+        logger.error("Could not connect to the companion")
+        return 1
+    try:
+        idx = await find_or_create_channel(mc, name, cfg.get("channel_scan_limit", DEFAULT_CHANNEL_SCAN_LIMIT))
+    finally:
+        await mc.disconnect()
+    if idx is None:
+        return 1
+    logger.info("summary_channel '%s' is in slot %d", name, idx)
+    return 0
 
 
 def configure_logging(log_file: Optional[str]) -> None:
@@ -638,12 +736,19 @@ def main() -> None:
         help="Sync only this node: its name (case-insensitive) or the start of its "
              "pubkey_prefix. Repeat for several. Default: every configured node.",
     )
+    parser.add_argument(
+        "--ensure-channel", action="store_true",
+        help="Only make sure summary_channel is on the companion (adds it to a free slot), then exit.",
+    )
     args = parser.parse_args()
 
     configure_logging(args.log_file)
 
     cfg = load_config(args.config)
+    if args.ensure_channel:
+        sys.exit(asyncio.run(ensure_channel(cfg)))
     if args.only:
+        cfg["_manual"] = True
         cfg["repeaters"] = select_nodes(cfg["repeaters"], args.only)
         logger.info("Manual run of %d node(s): %s", len(cfg["repeaters"]),
                     ", ".join(n.get("name") or n.get("pubkey_prefix") or "?" for n in cfg["repeaters"]))
@@ -651,12 +756,16 @@ def main() -> None:
     results = asyncio.run(run(cfg))
     elapsed = time.time() - started
 
-    ok = sum(1 for r in results if r.outcome == Outcome.SUCCESS)
+    skipped = [r for r in results if r.outcome == Outcome.SKIPPED_PEER]
+    ok = sum(1 for r in results if r.outcome in (Outcome.SUCCESS, Outcome.SKIPPED_PEER))
     rebooted = [r for r in results if r.outcome == Outcome.AUTO_REBOOTED]
     backwards = [r for r in results if r.outcome == Outcome.ALREADY_CURRENT]
-    failed = [r for r in results if r.outcome not in (Outcome.SUCCESS,)]
+    failed = [r for r in results if r.outcome not in (Outcome.SUCCESS, Outcome.SKIPPED_PEER)]
 
     logger.info("Done in %.1fs: %d/%d succeeded", elapsed, ok, len(results))
+    if skipped:
+        logger.info("%d node(s) skipped - a peer bot synced them recently: %s",
+                    len(skipped), ", ".join(r.node for r in skipped))
     if rebooted:
         logger.warning(
             "%d node(s) had a stuck forward clock - issued 'clkreboot' automatically: %s",

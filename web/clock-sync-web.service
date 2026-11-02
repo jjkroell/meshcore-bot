@@ -9,7 +9,10 @@ Group=clocksync-web
 ExecStart=/opt/clock_sync/venv/bin/python /opt/clock_sync_web/clock_sync_web.py --port 8090
 Restart=on-failure
 RestartSec=5
-# Only /etc/clock_sync is writable (the config, its backups, the auth file).
+# Writable: /etc/clock_sync (the config, its backups, the auth file) and
+# /var/lib/clock-sync-web (the permanent copy of the bot's message log).
+StateDirectory=clock-sync-web
+StateDirectoryMode=0750
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/etc/clock_sync
