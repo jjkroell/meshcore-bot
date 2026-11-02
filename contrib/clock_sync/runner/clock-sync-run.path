@@ -1,0 +1,9 @@
+[Unit]
+Description=Start a clock sync when the web page asks for one
+
+[Path]
+PathExists=/etc/clock_sync/run-request
+Unit=clock-sync-run.service
+
+[Install]
+WantedBy=paths.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 5 minutes that meshcore-bot still hears the radio
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

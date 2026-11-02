@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart meshcore-bot if it has stopped hearing the radio
+After=meshcore-bot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/meshcore-bot-watchdog.py

@@ -1,0 +1,11 @@
+[Unit]
+Description=Clock sync on the schedule set on the web page
+
+[Service]
+Type=oneshot
+ExecStart=/opt/clock_sync/venv/bin/python -I /opt/clock_sync/clock-sync-scheduler.py
+# A run is capped at 40 min by the wrapper. While it runs, this unit stays
+# active, so the timer can't start a second one.
+TimeoutStartSec=50min
+# 1 = finished but some nodes failed; 75 = the radio was busy. Not unit failures.
+SuccessExitStatus=1 75
