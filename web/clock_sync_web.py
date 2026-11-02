@@ -54,6 +54,7 @@ for _d in ("/opt/clock_sync", os.path.join(os.path.dirname(os.path.abspath(__fil
         sys.path.insert(0, _d)
         break
 import peer_parse  # noqa: E402
+import schedule  # noqa: E402
 
 CONFIG = "/etc/clock_sync/clock_sync.yaml"
 BACKUP_DIR = "/etc/clock_sync/backups"
@@ -517,6 +518,14 @@ def channel_messages(channel: str, since_days: float = 60, limit: int = 2000) ->
     return [seen[k] for k in sorted(seen, reverse=True)]
 
 
+def schedule_view(cfg: dict) -> dict:
+    sched, from_file = schedule.load()
+    if not from_file and "peer_skip_hours" in cfg:
+        sched["peer_skip_hours"] = cfg["peer_skip_hours"]
+    nxt = schedule.next_run(sched)
+    return {**sched, "from_file": from_file, "next": nxt.timestamp() if nxt else None}
+
+
 def request_run(names: list[str]) -> None:
     """Drop a run request for the root path unit: one node name per line,
     empty for every node."""
@@ -650,6 +659,7 @@ class Handler(BaseHTTPRequestHandler):
                              "running": running, "requested": os.path.exists(RUN_REQUEST),
                              "run": {k: v for k, v in run.items() if k != "nodes"},
                              "config": CONFIG, "channel": channel, "peers": peers, "me": me,
+                             "schedule": schedule_view(cfg),
                              "channel_msgs": [{"ts": ts, "sender": s, "text": c} for ts, s, _, c in msgs[:25]]})
         elif url.path == "/api/suggest":
             q = parse_qs(url.query).get("q", [""])[0]
@@ -667,6 +677,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/run":
             return self._run()
+        if path == "/api/schedule":
+            return self._schedule()
         if path != "/api/save":
             return self._send(404, b"Not found\n", "text/plain")
         try:
@@ -730,6 +742,30 @@ def _run_handler(self):
 Handler._run = _run_handler
 
 
+def _schedule_handler(self):
+    """POST /api/schedule {days, time, peer_skip_hours, paused}."""
+    try:
+        n = int(self.headers.get("Content-Length", "0"))
+        if n > 5_000:
+            raise ValueError("request too large")
+        body = json.loads(self.rfile.read(n) or b"{}")
+        with _lock:
+            current, _ = schedule.load()  # fields not sent keep their current value
+            sched = schedule.save({**current, **{k: body[k] for k in ("days", "time", "peer_skip_hours", "paused")
+                                                 if k in body}})
+        self.log_message("schedule saved: %s", json.dumps(sched))
+        nxt = schedule.next_run(sched)
+        self._json(200, {"ok": True, "schedule": {**sched, "from_file": True,
+                                                    "next": nxt.timestamp() if nxt else None}})
+    except ValueError as e:
+        self._json(400, {"error": str(e)})
+    except OSError as e:
+        self._json(500, {"error": str(e)})
+
+
+Handler._schedule = _schedule_handler
+
+
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -773,6 +809,12 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 .msg.err{display:block;background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
 .msg.info{display:block;background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
 .edit input{margin-bottom:6px}
+.days{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.days button{min-width:52px}
+.days button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.srow{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.srow input[type=time]{width:auto}.srow input[type=number]{width:80px}
+.srow label{display:flex;gap:6px;align-items:center;margin:0;color:var(--ink);font-size:15px}
 @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}}
 @media (max-width:700px){
  .grid{grid-template-columns:1fr}
@@ -785,10 +827,23 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 </style></head>
 <body><main>
 <h1>Clock sync nodes</h1>
-<p class="sub">Repeaters the 04:00 clock sync logs into (every other day). A node another time-sync bot reported synced in the last day is skipped on the scheduled run. Changes save straight to <code id="cfg"></code> and apply from the next run.</p>
+<p class="sub">Repeaters the scheduled clock sync logs into. A node another time-sync bot reported synced within the skip window is skipped on scheduled runs and Run all. Changes save straight to <code id="cfg"></code> and apply from the next run.</p>
 <div id="msg" class="msg"></div>
 <div class="card runbar"><div class="run" id="run"><span class="muted">Loading…</span></div>
  <button class="primary" id="runall">Run all now</button></div>
+
+<div class="card" id="sched">
+ <div><b>Schedule</b> <span class="muted" id="snext"></span></div>
+ <div class="days" id="sdays"></div>
+ <div class="srow">
+  <label>at <input type="time" id="stime" step="60"></label>
+  <label>skip if another bot synced within <input type="number" id="sskip" min="0" max="168" step="1"> h</label>
+ </div>
+ <div class="srow" style="margin-top:10px;justify-content:space-between">
+  <label><input type="checkbox" id="spause" style="width:auto"> pause automatic runs</label>
+  <button class="primary" id="ssave" disabled>Save schedule</button>
+ </div>
+</div>
 
 <div class="card">
  <label for="q">Find a repeater the bot has heard</label>
@@ -835,6 +890,7 @@ async function load(){
  const run=j.run;
  $("#run").innerHTML=(run.live?`<span class="chip ${run.live.state==="in progress"?"warn":"bad"}">${run.live.state==="in progress"?"Run in progress":"Run stopped early"}</span><span>started <b>${esc(run.live.started.slice(11,16))}</b>, ${run.live.done} node${run.live.done===1?"":"s"} done${run.live.state==="in progress"?" — reload for more":""}</span><span class="muted">·</span>`:"")+
  (run.finished?`<span>Last finished run <b>${esc(run.finished)}</b></span><span><b class="${run.ok===run.total?"ok":run.ok? "warn":"bad"}">${run.ok}/${run.total}</b> synced</span>`:'<span class="muted">No finished run in the log yet</span>');
+ if(!schedDirty)showSched(j.schedule);
  if(j.channel){$("#chan").style.display="";$("#chanh").textContent=j.channel;
   $("#chanp").textContent=j.peers.length?"Peer bot"+(j.peers.length>1?"s":"")+": "+j.peers.join(", ")+" — their OK / SUCCESS posts count for the skip":"No peer bots configured";
   const pn=new Set(j.peers.map(p=>p.toLowerCase().replace(/[^0-9a-z]/g,"")));
@@ -855,6 +911,19 @@ function render(){
  $("#runall").disabled=busy();$("#runall").textContent=data.requested?"Starting…":data.running?"Running…":"Run all now";
  clearTimeout(poll);if(busy())poll=setTimeout(()=>load().catch(()=>{}),10000);}
 let poll=null;
+const DAYS=["mon","tue","wed","thu","fri","sat","sun"];let sdays=new Set(),schedDirty=false;
+function showSched(s){sdays=new Set(s.days);$("#stime").value=s.time;$("#sskip").value=s.peer_skip_hours;$("#spause").checked=s.paused;
+ $("#snext").textContent=s.paused?"· paused":s.next?"· next "+when(s.next):"· no days picked";schedDirty=false;$("#ssave").disabled=true;drawDays();}
+function drawDays(){$("#sdays").innerHTML=DAYS.map(d=>`<button type="button" data-d="${d}" class="${sdays.has(d)?"on":""}" aria-pressed="${sdays.has(d)}">${d[0].toUpperCase()+d.slice(1)}</button>`).join("");}
+function dirty(){schedDirty=true;$("#ssave").disabled=false;}
+$("#sdays").onclick=e=>{const b=e.target.closest("[data-d]");if(!b)return;const d=b.dataset.d;sdays.has(d)?sdays.delete(d):sdays.add(d);drawDays();dirty();};
+["#stime","#sskip","#spause"].forEach(id=>$(id).addEventListener("input",dirty));
+$("#ssave").onclick=async()=>{
+ const body={days:DAYS.filter(d=>sdays.has(d)),time:$("#stime").value,peer_skip_hours:Number($("#sskip").value),paused:$("#spause").checked};
+ const r=await fetch("/api/schedule",{method:"POST",headers:{"Content-Type":"application/json","X-Clock-Sync":"1"},body:JSON.stringify(body)});
+ const j=await r.json().catch(()=>({error:"bad response"}));
+ if(!r.ok){msg(j.error||("HTTP "+r.status),"err");return;}
+ showSched(j.schedule);msg(j.schedule.paused?"Schedule saved — automatic runs paused.":j.schedule.next?"Schedule saved. Next run "+when(j.schedule.next)+".":"Schedule saved — no days picked, so no automatic runs.","info");};
 const busy=()=>!!(data&&(data.running||data.requested));
 async function runNow(names){
  const what=names.length?names.join(", "):`all ${data.nodes.length} nodes`;

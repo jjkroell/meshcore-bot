@@ -28,6 +28,7 @@ import yaml
 from meshcore import EventType, MeshCore
 
 import peer_parse  # next to this script
+import schedule  # the web page's schedule (also holds the peer skip window)
 
 logger = logging.getLogger("clock_sync")
 
@@ -775,6 +776,9 @@ def main() -> None:
     configure_logging(args.log_file)
 
     cfg = load_config(args.config)
+    sched, from_file = schedule.load()
+    if from_file:  # set on the web page; beats the config file's value
+        cfg["peer_skip_hours"] = sched["peer_skip_hours"]
     if args.ensure_channel:
         sys.exit(asyncio.run(ensure_channel(cfg)))
     if args.only:
