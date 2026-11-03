@@ -23,7 +23,12 @@ Each result is posted to `summary_channel` as
 
     Name [ecf7f5]: SUCCESS (5s off)
 
-(first 3 bytes of the repeater's key). Bots listed in `peer_bots` are read
+(first 3 bytes of the repeater's key), between a start and a finish line:
+
+    Time Sync started Wed Nov 04 04:00: 12 repeaters to check, 1 skipped (synced by PMD-TimeSync in last 24h)
+    Time Sync finished Wed Nov 04 04:14: 11/12 OK, 1 NOT done, 1 skipped. Done until Fri 04:00
+
+(`announce_runs: false` turns those two off). Bots listed in `peer_bots` are read
 back from meshcore-bot's message log: a repeater one of them reported `SUCCESS`
 or `OK` within the skip window is skipped on scheduled runs and Run all (never
 on a single-node Run). Posts without a key (`4/11 Mt Benson Top N: OK (5s off)`)
@@ -41,4 +46,4 @@ In order, each with `sudo bash`:
 
 Config: `/etc/clock_sync/clock_sync.yaml` - `companion`, `admin_password`,
 `repeaters` (edited on the page), `summary_channel`, `peer_bots`, optional
-`bot_name`. Log: `/var/log/clock_sync/clock_sync.log`.
+`bot_name`, `announce_runs`. Log: `/var/log/clock_sync/clock_sync.log`.

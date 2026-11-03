@@ -40,6 +40,7 @@ DEFAULT_STATE_FILE = "/opt/clock_sync/state.json"
 DEFAULT_BOT_DB = "/opt/meshcore-bot/meshcore_bot.db"
 DEFAULT_CLKREBOOT_MIN_HOURS = 12  # must be well under the ~48h run cadence
 DEFAULT_CLKREBOOT_RETRY_DELAY = 30  # seconds to let a node reboot before retrying `clock sync`
+FINISH_POST_GAP = 3  # seconds between the last node's post and the finish post
 CHAN_MSG_MAX_BYTES = 120  # UTF-8 bytes; the radio prepends "<our name>: " inside a ~160-byte limit
 DEFAULT_PEER_SKIP_HOURS = 24
 
@@ -276,6 +277,57 @@ def format_post(label: str, key: str, outcome: str, detail: str = "") -> str:
             extra = raw.decode("utf-8", "ignore") + "..." if room > 6 else ""
         msg += extra
     return msg
+
+
+def fit_post(msg: str) -> str:
+    """Trim a free-text #time-sync line to CHAN_MSG_MAX_BYTES (UTF-8)."""
+    raw = msg.encode()
+    if len(raw) <= CHAN_MSG_MAX_BYTES:
+        return msg
+    return raw[: CHAN_MSG_MAX_BYTES - 3].decode("utf-8", "ignore").rstrip() + "..."
+
+
+def _stamp(ts: Optional[float] = None) -> str:
+    return time.strftime("%a %b %d %H:%M", time.localtime(ts))  # "Tue Nov 03 02:30", as PMD-TimeSync
+
+
+def format_start(to_check: int, skipped: int, peers_seen: list[str], skip_hours: float, manual: bool) -> str:
+    """`Time Sync started Tue Nov 03 02:30: 10 repeaters to check, 1 skipped
+    (synced by PMD-TimeSync in last 24h)` - the same words PMD-TimeSync uses."""
+    msg = f"Time Sync started {_stamp()}: {to_check} repeater{'s' if to_check != 1 else ''} to check"
+    if skipped:
+        who = ", ".join(peers_seen) or "another bot"
+        msg += f", {skipped} skipped (synced by {who} in last {skip_hours:g}h)"
+    if manual:
+        msg += " (manual run)"
+    return fit_post(msg)
+
+
+def format_finish(results: list["SyncResult"], until: str, planned: Optional[int] = None) -> str:
+    """`Time Sync finished Tue Nov 03 02:39: 8/10 OK, 2 NOT done, 1 skipped.
+    Done until Fri 02:30` - PMD-TimeSync's words. OK = clock set this run.
+    planned (the run died part way): count against every node it meant to check."""
+    skipped = sum(1 for r in results if r.outcome == Outcome.SKIPPED_PEER)
+    checked = len(results) - skipped if planned is None else planned
+    ok = sum(1 for r in results if r.outcome == Outcome.SUCCESS)
+    word = "finished" if planned is None else "stopped early"
+    msg = f"Time Sync {word} {_stamp()}: {ok}/{checked} OK"
+    if checked - ok:
+        msg += f", {checked - ok} NOT done"
+    if skipped:
+        msg += f", {skipped} skipped"
+    if until:
+        msg += f". {until}"
+    return fit_post(msg)
+
+
+def next_run_text() -> str:
+    """'Done until Fri 04:00' from the web page's schedule; 'Schedule paused' when it is."""
+    sched, _ = schedule.load()
+    nxt = schedule.next_run(sched)
+    if nxt is None:
+        return "Schedule paused"
+    return "Done until " + nxt.strftime("%a %H:%M")
 
 
 async def find_or_create_channel(mc: MeshCore, name: str, scan_limit: int) -> Optional[int]:
@@ -624,6 +676,9 @@ async def run(cfg: dict) -> list[SyncResult]:
         peer_successes = load_peer_successes(bot_db, summary_channel, peers, time.time() - peer_skip_hours * 3600)
         logger.info("Peer bots %s: %d node success(es) on %s in the last %g h",
                     ", ".join(peers), len(peer_successes), summary_channel, peer_skip_hours)
+    # "Time Sync started ..." before the first node and "Time Sync finished ..."
+    # after the last, like PMD-TimeSync.
+    announce = cfg.get("announce_runs", True)
     state = load_state(state_file)
 
     if transport == "serial":
@@ -657,50 +712,79 @@ async def run(cfg: dict) -> list[SyncResult]:
             channel_idx = await find_or_create_channel(mc, summary_channel, channel_scan_limit)
 
         nodes = cfg["repeaters"]
-        for i, node_cfg in enumerate(nodes):
-            if peer_successes:
+        # Decide the peer skips up front, so the start message can count them.
+        peer_hits: dict[int, dict] = {}
+        if peer_successes:
+            for i, node_cfg in enumerate(nodes):
                 contact = find_contact(mc, node_cfg)
                 key = contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")
                 hit = peer_parse.latest_for(peer_successes, key)
                 if hit:
+                    peer_hits[i] = hit
+        to_sync = [i for i in range(len(nodes)) if i not in peer_hits]
+
+        async def post(msg: str) -> None:
+            try:
+                await asyncio.wait_for(mc.commands.send_chan_msg(channel_idx, msg), 20)
+            except Exception as e:  # a lost post never stops the run
+                logger.warning("Could not post to %s: %s", summary_channel, e)
+
+        announced = False
+        if channel_idx is not None and announce and nodes:
+            seen = sorted({h["sender"] for h in peer_hits.values()})
+            await post(format_start(len(to_sync), len(peer_hits), seen, peer_skip_hours, bool(cfg.get("_manual"))))
+            announced = True
+
+        try:
+            for i, node_cfg in enumerate(nodes):
+                hit = peer_hits.get(i)
+                if hit:
                     ts = hit["ts"]
                     result = SyncResult(
-                        node_cfg.get("name") or key or "?", Outcome.SKIPPED_PEER,
+                        node_cfg.get("name") or str(node_cfg.get("pubkey_prefix") or "?"), Outcome.SKIPPED_PEER,
                         f"synced by {hit['sender']} at {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))}, "
                         f"{(time.time() - ts) / 3600:.1f} h ago" + (f", {hit['note']}" if hit["note"] else ""),
                     )
                     results.append(result)
                     log_result(result)
                     continue  # nothing sent, so no delay before the next node
-            node_password = node_cfg.get("admin_password", admin_password)
-            result = await sync_one(
-                mc,
-                node_cfg,
-                node_password,
-                login_timeout,
-                reply_timeout,
-                reset_path,
-                state,
-                auto_clkreboot,
-                clkreboot_min_hours,
-                clkreboot_retry_delay,
-                restore_missing,
-                bot_db,
-            )
-            results.append(result)
-            log_result(result)
-            save_state(state_file, state)  # after every node, not just at the end - durable across crashes
+                node_password = node_cfg.get("admin_password", admin_password)
+                result = await sync_one(
+                    mc,
+                    node_cfg,
+                    node_password,
+                    login_timeout,
+                    reply_timeout,
+                    reset_path,
+                    state,
+                    auto_clkreboot,
+                    clkreboot_min_hours,
+                    clkreboot_retry_delay,
+                    restore_missing,
+                    bot_db,
+                )
+                results.append(result)
+                log_result(result)
+                save_state(state_file, state)  # after every node, not just at the end - durable across crashes
 
-            if channel_idx is not None:
-                contact = find_contact(mc, node_cfg)
-                key = (contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")).lower()
-                detail = result.detail if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED) else ""
-                if result.offset is not None:  # `Name [key]: SUCCESS (5s off)`, as PMD-TimeSync does
-                    detail = f"({peer_parse.fmt_offset(result.offset)})" + (f" {detail.split(' - ', 1)[-1]}" if detail else "")
-                await mc.commands.send_chan_msg(channel_idx, format_post(result.node, key, result.outcome, detail))
+                if channel_idx is not None:
+                    contact = find_contact(mc, node_cfg)
+                    key = (contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")).lower()
+                    detail = result.detail if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED) else ""
+                    if result.offset is not None:  # `Name [key]: SUCCESS (5s off)`, as PMD-TimeSync does
+                        detail = f"({peer_parse.fmt_offset(result.offset)})" + (f" {detail.split(' - ', 1)[-1]}" if detail else "")
+                    await post(format_post(result.node, key, result.outcome, detail))
 
-            if i < len(nodes) - 1:
-                await asyncio.sleep(delay)
+                if i != to_sync[-1]:
+                    await asyncio.sleep(delay)
+        except Exception:
+            if announced:  # say so rather than leave the start message hanging
+                await asyncio.sleep(FINISH_POST_GAP)
+                await post(format_finish(results, next_run_text(), planned=len(to_sync)))
+            raise
+        if announced:
+            await asyncio.sleep(FINISH_POST_GAP)
+            await post(format_finish(results, next_run_text()))
     finally:
         await mc.disconnect()
 
