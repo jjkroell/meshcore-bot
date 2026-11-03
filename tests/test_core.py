@@ -1,13 +1,16 @@
 """Tests for MeshCoreBot logic (config loading, radio settings, helpers)."""
 
 import asyncio
+import socket
 import struct
+import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modules.core import MeshCoreBot
+from modules.i18n import Translator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -147,6 +150,120 @@ monitor_channels = #general
         config_file.unlink()
         success, msg = b.reload_config()
         assert success is False
+
+    def test_reload_drops_keys_deleted_from_file(self, tmp_path):
+        """ConfigParser.read() merges; reload must not resurrect deleted keys.
+
+        The web settings UI deletes rows (e.g. announce.* triggers) from
+        config.ini — a reload afterwards has to reflect the deletion.
+        """
+        config_file = tmp_path / "config.ini"
+        db_path = tmp_path / "bot.db"
+        _write_config(config_file, db_path, extra="[Channels_List]\nseattle = Seattle chat\n")
+        b = MeshCoreBot(config_file=str(config_file))
+        assert b.config.get("Channels_List", "seattle") == "Seattle chat"
+        # Remove the key (and its whole section) from the file.
+        _write_config(config_file, db_path)
+        success, _ = b.reload_config()
+        assert success is True
+        assert not b.config.has_section("Channels_List") or not b.config.has_option(
+            "Channels_List", "seattle"
+        )
+
+    def test_reload_reinstantiates_command_plugins(self, tmp_path):
+        """Command settings are cached in __init__; reload must refresh them."""
+        config_file = tmp_path / "config.ini"
+        db_path = tmp_path / "bot.db"
+        _write_config(config_file, db_path, extra="[Ping_Command]\nenabled = true\n")
+        b = MeshCoreBot(config_file=str(config_file))
+        if not hasattr(b, "command_manager"):
+            pytest.skip("bot built without command_manager")
+        before = b.command_manager.commands.get("ping")
+        _write_config(config_file, db_path, extra="[Ping_Command]\nenabled = false\n")
+        success, _ = b.reload_config()
+        assert success is True
+        after = b.command_manager.commands.get("ping")
+        assert after is not None and after is not before
+        assert b.config.getboolean("Ping_Command", "enabled") is False
+
+    def test_reload_replaces_translator_cache_atomically(self, tmp_path):
+        config_file = tmp_path / "config.ini"
+        db_path = tmp_path / "bot.db"
+        _write_config(
+            config_file,
+            db_path,
+            extra="[Localization]\nlanguage = en\ntranslation_path = translations/\n",
+        )
+        b = MeshCoreBot(config_file=str(config_file))
+        old_cache = b._translator_cache
+
+        _write_config(
+            config_file,
+            db_path,
+            extra="[Localization]\nlanguage = de\ntranslation_path = translations/\n",
+        )
+        success, _ = b.reload_config()
+
+        assert success is True
+        assert b.translation_path == "translations/"
+        assert b.translator.language == "de"
+        assert b._translator_cache == {"de": b.translator}
+        assert b._translator_cache is not old_cache
+
+    def test_failed_reload_restores_translator_cache(self, tmp_path):
+        config_file = tmp_path / "config.ini"
+        db_path = tmp_path / "bot.db"
+        _write_config(
+            config_file,
+            db_path,
+            extra="[Localization]\nlanguage = en\ntranslation_path = translations/\n",
+        )
+        b = MeshCoreBot(config_file=str(config_file))
+        old_translator = b.translator
+        old_path = b.translation_path
+        old_cache = b._translator_cache
+
+        _write_config(
+            config_file,
+            db_path,
+            extra="[Localization]\nlanguage = de\ntranslation_path = translations/\n",
+        )
+        with patch("modules.core.CommandManager", side_effect=RuntimeError("boom")):
+            success, _ = b.reload_config()
+
+        assert success is False
+        assert b.translator is old_translator
+        assert b.translation_path == old_path
+        assert b._translator_cache is old_cache
+
+
+class TestResponseTranslators:
+    def test_locale_only_catalog_is_available_by_base_language(
+        self, tmp_path, monkeypatch
+    ):
+        translations = tmp_path / "translations"
+        translations.mkdir()
+        (translations / "en.json").write_text(
+            '{"commands": {"hello": {"response_format": "Hello"}}}',
+            encoding="utf-8",
+        )
+        (translations / "fr-CA.json").write_text(
+            '{"commands": {"hello": {"response_format": "Allo"}}}',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        b = object.__new__(MeshCoreBot)
+        b.logger = MagicMock()
+        b.translation_path = str(translations)
+        b.local_translation_path = str(tmp_path / "local" / "translations")
+        b.translator = Translator("en", b.translation_path, b.local_translation_path)
+        b._translator_cache = {"en": b.translator}
+
+        assert b.available_languages() == {"en", "fr"}
+        french = b.get_translator("fr")
+        assert french.language == "fr-CA"
+        assert french.translate("commands.hello.response_format") == "Allo"
 
 
 # ---------------------------------------------------------------------------
@@ -298,16 +415,32 @@ class TestProbeRadioHealth:
 
     def test_returns_false_when_meshcore_is_none(self, tmp_path):
         bot = self._make_bot(tmp_path)
+        bot.connected = True
         bot.meshcore = None
+        scheduled = []
+
+        async def fake_schedule(reason):
+            scheduled.append(reason)
+
+        bot._schedule_transport_reconnect = fake_schedule
         result = asyncio.run(bot._probe_radio_health())
         assert result is False
+        assert scheduled == ['probe_not_connected']
 
     def test_returns_false_when_not_connected(self, tmp_path):
         bot = self._make_bot(tmp_path)
+        bot.connected = True
         bot.meshcore = MagicMock()
         bot.meshcore.is_connected = False
+        scheduled = []
+
+        async def fake_schedule(reason):
+            scheduled.append(reason)
+
+        bot._schedule_transport_reconnect = fake_schedule
         result = asyncio.run(bot._probe_radio_health())
         assert result is False
+        assert scheduled == ['probe_not_connected']
 
     def test_error_event_increments_fail_count(self, tmp_path):
         from meshcore.events import EventType
@@ -482,6 +615,303 @@ class TestProbeRadioHealth:
         assert result is False
         assert mock_warn.called
 
+    def test_tcp_probe_error_at_threshold_schedules_reconnect_not_zombie(self, tmp_path):
+        from meshcore.events import EventType
+
+        bot = self._make_bot(tmp_path)
+        bot.config.set("Connection", "connection_type", "tcp")
+        bot.connected = True
+        bot._tcp_probe_fail_count = 2
+        bot.config.set("Connection", "radio_probe_fail_threshold", "3")
+
+        error_event = MagicMock()
+        error_event.type = EventType.ERROR
+        error_event.payload = {"reason": "no_event_received"}
+
+        bot.meshcore = MagicMock()
+        bot.meshcore.is_connected = True
+        bot.meshcore.commands.get_time = MagicMock(return_value=_make_coro(error_event))
+
+        scheduled = []
+
+        async def fake_schedule(reason):
+            scheduled.append(reason)
+
+        bot._schedule_transport_reconnect = fake_schedule
+
+        result = asyncio.run(bot._probe_radio_health())
+        assert result is False
+        assert bot.is_radio_zombie is False
+        assert scheduled == ['tcp_probe_failed']
+
+    def test_tcp_probe_timeout_at_threshold_schedules_reconnect(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot.config.set("Connection", "connection_type", "tcp")
+        bot.connected = True
+        bot._tcp_probe_fail_count = 2
+        bot.config.set("Connection", "radio_probe_fail_threshold", "3")
+
+        bot.meshcore = MagicMock()
+        bot.meshcore.is_connected = True
+        bot.meshcore.commands.get_time = MagicMock(return_value=_make_coro(None))
+
+        scheduled = []
+
+        async def fake_schedule(reason):
+            scheduled.append(reason)
+
+        bot._schedule_transport_reconnect = fake_schedule
+
+        async def run():
+            async def fake_wait_for(coro, timeout):
+                raise asyncio.TimeoutError()
+
+            with patch("asyncio.wait_for", side_effect=fake_wait_for):
+                return await bot._probe_radio_health()
+
+        result = asyncio.run(run())
+        assert result is False
+        assert scheduled == ['tcp_probe_failed']
+
+
+class TestTransportReconnect:
+    """Transport reconnect scheduling (TCP/serial/BLE)."""
+
+    def _make_bot(self, tmp_path: Path, connection_type: str = "serial") -> MeshCoreBot:
+        config_file = tmp_path / "config.ini"
+        db_path = tmp_path / "bot.db"
+        _write_config(config_file, db_path)
+        bot = MeshCoreBot(config_file=str(config_file))
+        if connection_type == "tcp":
+            bot.config.set("Connection", "connection_type", "tcp")
+            bot.config.set("Connection", "hostname", "127.0.0.1")
+        bot.connected = True
+        return bot
+
+    def test_schedule_skips_manual_disconnect(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        asyncio.run(bot._schedule_transport_reconnect("manual_disconnect"))
+        assert bot._transport_reconnect_in_progress is False
+
+    def test_schedule_skips_when_already_in_progress(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot._transport_reconnect_in_progress = True
+        asyncio.run(bot._schedule_transport_reconnect("tcp_disconnect"))
+        assert bot._transport_reconnect_in_progress is True
+
+    def test_schedule_sets_in_progress_and_metadata(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        with patch.object(bot, "_update_radio_connected_metadata") as mock_meta:
+            with patch("asyncio.create_task") as mock_create_task:
+
+                def swallow_task(coro):
+                    # Scheduling is mocked; close coroutine so it is not left unawaited.
+                    coro.close()
+                    return MagicMock()
+
+                mock_create_task.side_effect = swallow_task
+                asyncio.run(bot._schedule_transport_reconnect("tcp_disconnect"))
+        assert bot._transport_reconnect_in_progress is True
+        mock_meta.assert_called_once_with(False)
+        mock_create_task.assert_called_once()
+
+    def test_run_transport_reconnect_clears_in_progress_on_failure(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot._transport_reconnect_in_progress = True
+
+        async def fake_attempt():
+            return False
+
+        bot._attempt_reconnect = fake_attempt
+        asyncio.run(bot._run_transport_reconnect())
+        assert bot._transport_reconnect_in_progress is False
+        assert bot.connected is False
+
+    def test_disconnected_event_schedules_reconnect(self, tmp_path):
+        from meshcore.events import EventType
+
+        bot = self._make_bot(tmp_path)
+        bot.meshcore = MagicMock()
+        scheduled = []
+
+        async def fake_schedule(reason):
+            scheduled.append(reason)
+
+        bot._schedule_transport_reconnect = fake_schedule
+        bot.message_handler = MagicMock()
+
+        async def run_handlers():
+            await bot.setup_message_handlers()
+            disconnect_cb = None
+            for call in bot.meshcore.subscribe.call_args_list:
+                if call[0][0] == EventType.DISCONNECTED:
+                    disconnect_cb = call[0][1]
+                    break
+            assert disconnect_cb is not None
+            event = MagicMock()
+            event.payload = {"reason": "tcp_disconnect"}
+            await disconnect_cb(event)
+
+        async def noop_fetch():
+            return None
+
+        bot.meshcore.start_auto_message_fetching = noop_fetch
+
+        async def instant_sleep(*_args, **_kwargs):
+            return None
+
+        with patch("asyncio.sleep", instant_sleep):
+            asyncio.run(run_handlers())
+
+        assert scheduled == ["tcp_disconnect"]
+
+    def test_notify_services_transport_reconnected_only_running(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        running_svc = MagicMock()
+        running_svc.is_running.return_value = True
+        running_svc.on_transport_reconnected = AsyncMock()
+
+        stopped_svc = MagicMock()
+        stopped_svc.is_running.return_value = False
+        stopped_svc.on_transport_reconnected = AsyncMock()
+
+        bot.services = {"running": running_svc, "stopped": stopped_svc}
+        asyncio.run(bot._notify_services_transport_reconnected())
+
+        running_svc.on_transport_reconnected.assert_awaited_once()
+        stopped_svc.on_transport_reconnected.assert_not_awaited()
+
+    def test_keep_running_through_transport_reconnect(self, tmp_path):
+        """A reconnect clears connected; the main loop and scheduler must not treat that as a stop."""
+        bot = self._make_bot(tmp_path, connection_type="tcp")
+        bot.meshcore = None
+        # _schedule_transport_reconnect sets this before handing off to the task
+        bot._transport_reconnect_in_progress = True
+        seen_during_connect = []
+
+        async def fake_connect():
+            seen_during_connect.append((bot.connected, bot.keep_running))
+            bot.connected = True
+            return True
+
+        bot.connect = fake_connect
+        asyncio.run(bot._run_transport_reconnect())
+
+        assert seen_during_connect == [(False, True)]
+        assert bot._transport_reconnect_in_progress is False
+        assert bot.keep_running is True
+
+    def test_keep_running_false_after_reconnect_gives_up(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot._transport_reconnect_in_progress = True
+
+        async def fake_attempt():
+            bot.connected = False
+            return False
+
+        bot._attempt_reconnect = fake_attempt
+        asyncio.run(bot._run_transport_reconnect())
+        assert bot.keep_running is False
+
+    def test_keep_running_false_on_shutdown_mid_reconnect(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot.connected = False
+        bot._transport_reconnect_in_progress = True
+        assert bot.keep_running is True
+        bot._shutdown_event.set()
+        assert bot.keep_running is False
+
+    def test_keep_running_through_web_viewer_reconnect(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot.meshcore = MagicMock()
+        bot.meshcore.disconnect = AsyncMock()
+        seen_during_connect = []
+
+        async def fake_connect():
+            seen_during_connect.append((bot.connected, bot.keep_running))
+            return False
+
+        bot.connect = fake_connect
+        assert asyncio.run(bot.reconnect_radio()) is False
+        assert seen_during_connect == [(False, True)]
+        assert bot._radio_relinks_in_progress == 0
+        # A failed manual reconnect still ends the loops, as before
+        assert bot.keep_running is False
+
+    def test_failed_post_connect_initialization_cleans_up_and_stops(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        old_meshcore = MagicMock()
+        old_meshcore.disconnect = AsyncMock()
+        bot.meshcore = old_meshcore
+
+        new_meshcore = MagicMock()
+        new_meshcore.is_connected = True
+        new_meshcore.self_info = {}
+        new_meshcore.disconnect = AsyncMock()
+
+        bot.wait_for_contacts = AsyncMock()
+        bot.channel_manager.fetch_channels = AsyncMock()
+        bot.setup_message_handlers = AsyncMock(
+            side_effect=ConnectionError("message setup failed")
+        )
+
+        with patch(
+            "modules.core.meshcore.MeshCore.create_serial",
+            AsyncMock(return_value=new_meshcore),
+        ):
+            assert asyncio.run(bot.reconnect_radio()) is False
+
+        old_meshcore.disconnect.assert_awaited_once()
+        new_meshcore.disconnect.assert_awaited_once()
+        assert bot.meshcore is None
+        assert bot.connected is False
+        assert bot._radio_relinks_in_progress == 0
+        assert bot.keep_running is False
+
+    def test_connect_fails_when_channel_fetch_never_returns_channels(self, tmp_path):
+        bot = self._make_bot(tmp_path, connection_type="serial")
+        new_meshcore = MagicMock()
+        new_meshcore.is_connected = True
+        new_meshcore.self_info = {}
+        new_meshcore.disconnect = AsyncMock()
+
+        bot.wait_for_contacts = AsyncMock()
+        bot.channel_manager.fetch_channels = AsyncMock(return_value=False)
+        bot.setup_message_handlers = AsyncMock()
+
+        with patch(
+            "modules.core.meshcore.MeshCore.create_serial",
+            AsyncMock(return_value=new_meshcore),
+        ):
+            assert asyncio.run(bot.connect()) is False
+
+        new_meshcore.disconnect.assert_awaited_once()
+        bot.setup_message_handlers.assert_not_awaited()
+        assert bot.meshcore is None
+        assert bot.connected is False
+
+    def test_keep_running_through_web_viewer_reboot(self, tmp_path):
+        bot = self._make_bot(tmp_path)
+        bot.meshcore = MagicMock()
+        bot.meshcore.is_connected = True
+        bot.meshcore.commands.reboot = AsyncMock()
+        bot.meshcore.disconnect = AsyncMock()
+        seen = []
+
+        async def fake_connect():
+            bot.connected = True
+            return True
+
+        async def instant_sleep(*_args, **_kwargs):
+            seen.append((bot.connected, bot.keep_running))
+
+        bot.connect = fake_connect
+        with patch("asyncio.sleep", instant_sleep):
+            assert asyncio.run(bot.reboot_radio()) is True
+        assert seen == [(False, True)]
+        assert bot._radio_relinks_in_progress == 0
+        assert bot.keep_running is True
+
 
 class TestRadioOfflineState:
     """Tests for _record_send_failure / _record_send_success / is_radio_offline."""
@@ -567,9 +997,41 @@ class TestSendStartupAdvertTimeout:
 class TestBotAdminServer:
     """Admin HTTP server: /api/admin/reload and /api/admin/health."""
 
-    def _make_bot_with_admin(self, tmp_path, port=15001):
+    @staticmethod
+    def _free_port() -> int:
+        """Reserve a port from the ephemeral range and hand the number back.
+
+        Hardcoded ports make the suite unrunnable twice at once. The second
+        process fails to bind, but its request still reaches the first process's
+        server on that port and comes back with whatever that server happens to
+        be patched to return, which surfaces as an unrelated assertion failure.
+        """
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    @staticmethod
+    def _wait_until_serving(port: int, timeout: float = 5.0) -> None:
+        """Block until the admin server accepts connections, or fail loudly.
+
+        The server comes up in a thread; a fixed sleep is either too short on a
+        loaded machine or wasted time on an idle one. Polling also turns a server
+        that never binds into a clear message instead of a confusing failure at
+        the assertion further down.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return
+            except OSError:
+                time.sleep(0.01)
+        raise AssertionError(f"admin server never started listening on port {port}")
+
+    def _make_bot_with_admin(self, tmp_path):
         """Write config with [Admin] enabled and return a bot + token."""
         token = "test-secret-token"
+        port = self._free_port()
         config_file = tmp_path / "config.ini"
         db_path = tmp_path / "bot.db"
         config_file.write_text(
@@ -634,15 +1096,14 @@ token =
 
     def test_reload_endpoint_success(self, tmp_path):
         """POST /api/admin/reload returns 200 and success=true when reload succeeds."""
-        import time
         import urllib.request
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15003)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
 
         with patch.object(bot, "reload_config", return_value=(True, "Configuration reloaded successfully")):
             server = bot._admin_server
             server.start()
-            time.sleep(0.4)
+            self._wait_until_serving(port)
 
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/admin/reload",
@@ -657,16 +1118,15 @@ token =
 
     def test_reload_endpoint_failure(self, tmp_path):
         """POST /api/admin/reload returns 409 when reload is rejected."""
-        import time
         import urllib.request
         from urllib.error import HTTPError
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15004)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
 
         with patch.object(bot, "reload_config", return_value=(False, "Radio settings changed")):
             server = bot._admin_server
             server.start()
-            time.sleep(0.4)
+            self._wait_until_serving(port)
 
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/admin/reload",
@@ -679,14 +1139,13 @@ token =
 
     def test_reload_endpoint_rejects_bad_token(self, tmp_path):
         """POST /api/admin/reload returns 401 with wrong token."""
-        import time
         import urllib.request
         from urllib.error import HTTPError
 
-        bot, _token, port = self._make_bot_with_admin(tmp_path, port=15005)
+        bot, _token, port = self._make_bot_with_admin(tmp_path)
         server = bot._admin_server
         server.start()
-        time.sleep(0.4)
+        self._wait_until_serving(port)
 
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/admin/reload",
@@ -699,13 +1158,12 @@ token =
 
     def test_health_endpoint_returns_ok(self, tmp_path):
         """GET /api/admin/health returns 200 and status=ok."""
-        import time
         import urllib.request
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15006)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
         server = bot._admin_server
         server.start()
-        time.sleep(0.4)
+        self._wait_until_serving(port)
 
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/admin/health",

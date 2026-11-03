@@ -2,6 +2,7 @@
 """
 Tide Command - Canadian tide predictions via DFO IWLS API
 """
+import asyncio
 import math
 import datetime
 import urllib.request
@@ -99,7 +100,8 @@ class TideCommand(BaseCommand):
 
             if content:
                 from ..utils import geocode_city_sync
-                glat, glon, _ = geocode_city_sync(self.bot, content)
+                # Off the event loop: a slow geocoder would stall radio RX
+                glat, glon, _ = await asyncio.to_thread(geocode_city_sync, self.bot, content)
                 if glat and glon:
                     lat, lon = glat, glon
                 else:
@@ -107,7 +109,7 @@ class TideCommand(BaseCommand):
                     return False
 
             station = self._nearest_station(lat, lon)
-            events = self._get_predictions(station['id'])
+            events = await asyncio.to_thread(self._get_predictions, station['id'])
 
             if not events:
                 await self.send_response(message, f"No tide predictions for {station['officialName']}")

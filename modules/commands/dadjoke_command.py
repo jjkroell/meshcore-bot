@@ -19,6 +19,8 @@ class DadJokeCommand(BaseCommand):
     """Handles dad joke commands using icanhazdadjoke.com API"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "dadjoke"
     keywords = ['dadjoke', 'dad joke', 'dadjokes', 'dad jokes']
     description = "Get a random dad joke from icanhazdadjoke.com"
@@ -30,6 +32,17 @@ class DadJokeCommand(BaseCommand):
     short_description = "Get a random dad joke"
     usage = "dadjoke"
     examples = ["dadjoke"]
+
+    # Web-viewer settings schema (see modules/settings_schema.py)
+    settings_schema = [
+        {
+            "key": "long_jokes",
+            "label": "Allow long jokes",
+            "type": "bool",
+            "default": False,
+            "help": "Permit multi-message long-form jokes instead of short one-liners.",
+        },
+    ]
 
     # API configuration
     DAD_JOKE_API_URL = "https://icanhazdadjoke.com/"
@@ -66,8 +79,13 @@ class DadJokeCommand(BaseCommand):
         Returns:
             bool: True if message matches a keyword, False otherwise.
         """
-        content_lower = self.cleanup_message_for_matching(message)
-        return any(content_lower == keyword or content_lower.startswith(keyword + ' ') for keyword in self.keywords)
+        return self._cleaned_content_matches(
+            message,
+            lambda content_lower: any(
+                content_lower == keyword or content_lower.startswith(keyword + ' ')
+                for keyword in self.keywords
+            ),
+        )
 
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
         """Override to add custom check (dadjoke_enabled) while using base class cooldown.
@@ -124,7 +142,7 @@ class DadJokeCommand(BaseCommand):
         try:
             headers = {
                 'Accept': 'application/json',
-                'User-Agent': 'MeshCoreBot (https://github.com/adam/meshcore-bot)'
+                'User-Agent': 'MeshCoreBot (https://github.com/agessaman/meshcore-bot)'
             }
 
             self.logger.debug(f"Fetching dad joke from: {self.DAD_JOKE_API_URL}")

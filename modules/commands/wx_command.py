@@ -4,15 +4,18 @@ Weather command for the MeshCore Bot
 Provides weather information using zip codes and NOAA APIs
 """
 
+import asyncio
 import re
+import threading
 import xml.dom.minidom
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional, ParamSpec, TypeVar
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .. import alert_format
 from ..models import MeshMessage
 from ..utils import (
     format_temperature_high_low,
@@ -44,15 +47,21 @@ from ..clients.mqtt_weather import (
     load_mqtt_weather_format_config,
     mqtt_weather_display_for_topic,
 )
+from .rain_command import nws_http_means_no_coverage
 
 # Multiday: plain digits (e.g. 7), 7day/7-day, or suffix form 7d/10d (min 2, max below).
 WX_MULTIDAY_MAX_DAYS = 16
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
 class WxCommand(BaseCommand):
     """Handles weather commands with zipcode support"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "wx"
     keywords = ['wx', 'weather', 'wxa', 'wxalert']
     description = "Get weather information for a zip code (usage: wx 12345)"
@@ -68,6 +77,44 @@ class WxCommand(BaseCommand):
     parameters = [
         {"name": "location", "description": "US zip code or city name"},
         {"name": "option", "description": "tomorrow, Nd (e.g. 7d, 10d), hourly, or alerts (optional)"}
+    ]
+
+    # Web-viewer settings schema (see modules/settings_schema.py)
+    settings_schema = [
+        {
+            "key": "temperature_unit",
+            "label": "Temperature unit",
+            "type": "enum",
+            "options": [
+                {"value": "fahrenheit", "label": "Fahrenheit (°F)"},
+                {"value": "celsius", "label": "Celsius (°C)"},
+            ],
+            "default": "fahrenheit",
+            "help": "Unit used when reporting temperatures.",
+        },
+        {
+            "key": "wind_speed_unit",
+            "label": "Wind speed unit",
+            "type": "enum",
+            "options": [
+                {"value": "mph", "label": "Miles per hour (mph)"},
+                {"value": "kmh", "label": "Kilometers per hour (km/h)"},
+            ],
+            "default": "mph",
+            "help": "Unit used when reporting wind speed.",
+        },
+        {"key": "weather_provider", "label": "Weather provider", "type": "enum", "section": "Weather",
+         "options": [
+             {"value": "noaa", "label": "NOAA (US, includes alerts)"},
+             {"value": "openmeteo", "label": "Open-Meteo (global)"},
+         ],
+         "default": "noaa", "help": "API used for forecasts. Shared weather setting."},
+        {"key": "default_city", "label": "Default city", "type": "str", "section": "Weather",
+         "default": "", "help": "City used for a bare 'wx' when no location is given. Shared weather setting."},
+        {"key": "default_state", "label": "Default state", "type": "str", "section": "Weather",
+         "default": "", "help": "2-letter state for city disambiguation (e.g. WA). Shared weather setting."},
+        {"key": "default_country", "label": "Default country", "type": "str", "section": "Weather",
+         "default": "US", "help": "2-letter country code (e.g. US). Shared weather setting."},
     ]
 
     # Error constants
@@ -90,8 +137,8 @@ class WxCommand(BaseCommand):
         if weather_provider == 'openmeteo' and WX_INTERNATIONAL_AVAILABLE:
             # Delegate to international weather command
             self.delegate_command = GlobalWxCommand(bot)
-            # Update keywords to match wx command for compatibility
-            self.delegate_command.keywords = ['wx', 'weather', 'wxa', 'wxalert']
+            # Use wx triggers plus any [Wx_Command] aliases loaded by BaseCommand.
+            self.delegate_command.keywords = list(self.keywords)
             self.delegate_command.description = "Get weather information for any location (usage: wx Tokyo)"
             self.logger.info("Weather provider set to 'openmeteo', delegating wx command to wx_international")
         else:
@@ -121,9 +168,18 @@ class WxCommand(BaseCommand):
             # This makes the API more resilient to timeouts and transient errors
             self.noaa_session = self._create_retry_session()
 
+            # requests.Session and WXSIM parser instances are shared by this command.
+            # Keep provider calls serialized as they were before moving them to worker
+            # threads. The lock is acquired inside the worker, never on the event loop.
+            self._sync_provider_lock = threading.Lock()
+
+            # Lazy: None = unknown, False = NOAA alerts unavailable (non-US / no coverage)
+            self._nws_alerts_available = None
+
     def _format_high_low(self, high: Optional[float], low: Optional[float], temp_symbol: str) -> str:
         """Format high/low using [Weather] temperature_*_format templates."""
-        return format_temperature_high_low(self.bot.config, high, low, temp_symbol, self.logger)
+        return format_temperature_high_low(self.bot.config, high, low, temp_symbol, self.logger,
+                                           translator=self.response_translator)
 
     @staticmethod
     def _noaa_period_temp_symbol(period: dict) -> str:
@@ -158,6 +214,25 @@ class WxCommand(BaseCommand):
 
         return session
 
+    def _run_sync_provider(
+        self,
+        operation: Callable[_P, _T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> _T:
+        """Run one shared synchronous provider operation under its worker lock."""
+        with self._sync_provider_lock:
+            return operation(*args, **kwargs)
+
+    async def _run_sync_provider_async(
+        self,
+        operation: Callable[_P, _T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> _T:
+        """Move blocking provider work off-loop without concurrent Session use."""
+        return await asyncio.to_thread(self._run_sync_provider, operation, *args, **kwargs)
+
     def get_help_text(self) -> str:
         """Get help text, delegating to international command if using Open-Meteo"""
         if self.delegate_command:
@@ -169,8 +244,13 @@ class WxCommand(BaseCommand):
         if self.delegate_command:
             return self.delegate_command.matches_keyword(message)
 
-        content_lower = self.cleanup_message_for_matching(message)
-        return any(content_lower.startswith(keyword + ' ') or content_lower == keyword for keyword in self.keywords)
+        return self._cleaned_content_matches(
+            message,
+            lambda content_lower: any(
+                content_lower.startswith(keyword + ' ') or content_lower == keyword
+                for keyword in self.keywords
+            ),
+        )
 
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
         """Override to delegate or use base class cooldown"""
@@ -370,9 +450,12 @@ class WxCommand(BaseCommand):
             # Still return the forecast, but log the warning
             # Optionally, we could return an error message here instead
 
-        # Get unit preferences from config
-        temp_unit = self.bot.config.get('Weather', 'temperature_unit', fallback='fahrenheit').lower()
-        wind_unit = self.bot.config.get('Weather', 'wind_speed_unit', fallback='mph').lower()
+        # Get unit preferences from config. Canonical section is [Wx_Command];
+        # get_config_value falls back to legacy [Weather] for existing setups.
+        temp_unit = self.get_config_value(
+            'Wx_Command', 'temperature_unit', fallback='fahrenheit', value_type='str').lower()
+        wind_unit = self.get_config_value(
+            'Wx_Command', 'wind_speed_unit', fallback='mph', value_type='str').lower()
 
         # Format based on forecast type
         if forecast_type == "tomorrow":
@@ -433,6 +516,23 @@ class WxCommand(BaseCommand):
                 return f"{location_name}: {current}"
             return current
 
+    async def _get_wxsim_weather_async(
+        self,
+        source_url: str,
+        forecast_type: str = "default",
+        num_days: int = 7,
+        message: MeshMessage = None,
+        location_name: Optional[str] = None,
+    ) -> str:
+        return await self._run_sync_provider_async(
+            self._get_wxsim_weather,
+            source_url,
+            forecast_type,
+            num_days,
+            message,
+            location_name,
+        )
+
     def _coordinates_to_location_string(self, lat: float, lon: float) -> Optional[str]:
         """Convert coordinates to a location string (city name) using reverse geocoding.
 
@@ -471,6 +571,13 @@ class WxCommand(BaseCommand):
             self.logger.debug(f"Error reverse geocoding coordinates {lat}, {lon}: {e}")
             return None
 
+    async def _coordinates_to_location_string_async(
+        self, lat: float, lon: float
+    ) -> Optional[str]:
+        return await self._run_sync_provider_async(
+            self._coordinates_to_location_string, lat, lon
+        )
+
     async def execute(self, message: MeshMessage) -> bool:
         """Execute the weather command"""
         # Delegate to international command if using Open-Meteo provider
@@ -506,7 +613,9 @@ class WxCommand(BaseCommand):
                 # Use custom WXSIM default source
                 try:
                     self.record_execution(message.sender_id)
-                    weather_data = self._get_wxsim_weather(wxsim_source, "default", 7, message)
+                    weather_data = await self._get_wxsim_weather_async(
+                        wxsim_source, "default", 7, message
+                    )
                     await self.send_response(message, weather_data)
                     return True
                 except Exception as e:
@@ -522,7 +631,9 @@ class WxCommand(BaseCommand):
                 parts = [parts[0], location_str]
                 using_companion_location = True
                 # Get city name for display
-                display_name = self._coordinates_to_location_string(companion_location[0], companion_location[1])
+                display_name = await self._coordinates_to_location_string_async(
+                    companion_location[0], companion_location[1]
+                )
                 if display_name:
                     self.logger.info(f"Using companion location: {display_name} ({companion_location[0]}, {companion_location[1]})")
                 else:
@@ -550,7 +661,9 @@ class WxCommand(BaseCommand):
                     if bot_loc:
                         location_str = f"{bot_loc[0]},{bot_loc[1]}"
                         parts = [parts[0], location_str]
-                        display_name = self._coordinates_to_location_string(bot_loc[0], bot_loc[1])
+                        display_name = await self._coordinates_to_location_string_async(
+                            bot_loc[0], bot_loc[1]
+                        )
                         if display_name:
                             self.logger.info(
                                 f"Using bot location (no args): {display_name} ({bot_loc[0]}, {bot_loc[1]})"
@@ -642,7 +755,13 @@ class WxCommand(BaseCommand):
             # Use custom WXSIM source
             try:
                 self.record_execution(message.sender_id)
-                weather_data = self._get_wxsim_weather(wxsim_source, forecast_type, num_days, message, location_name=location)
+                weather_data = await self._get_wxsim_weather_async(
+                    wxsim_source,
+                    forecast_type,
+                    num_days,
+                    message,
+                    location_name=location,
+                )
                 if forecast_type == "multiday":
                     await self._send_multiday_forecast(message, weather_data)
                 else:
@@ -659,8 +778,8 @@ class WxCommand(BaseCommand):
         if re.match(r'^\s*-?\d+\.?\d*\s*,\s*-?\d+\.?\d*\s*$', location):
             # It's coordinates (lat,lon format)
             location_type = "coordinates"
-        elif re.match(r'^\d{5}$', location):
-            # It's a zipcode
+        elif re.match(r'^\s*\d{5}\s*$', location):
+            # It's a zipcode (allow surrounding whitespace; strip later in geocode)
             location_type = "zipcode"
         else:
             # It's a city name (possibly with state)
@@ -686,12 +805,12 @@ class WxCommand(BaseCommand):
                         await self.send_response(message, self.translate('commands.wx.error', error=f"Invalid coordinates format: {location}"))
                         return True
                 elif location_type == "zipcode":
-                    lat, lon = self.zipcode_to_lat_lon(location)
+                    lat, lon = await self._zipcode_to_lat_lon_async(location)
                     if lat is None or lon is None:
                         await self.send_response(message, self.translate('commands.wx.no_location_zipcode', location=location))
                         return True
                 else:  # city
-                    result = self.city_to_lat_lon(location)
+                    result = await self._city_to_lat_lon_async(location)
                     if len(result) == 3:
                         lat, lon, address_info = result
                     else:
@@ -714,7 +833,6 @@ class WxCommand(BaseCommand):
                 await self.send_response(message, weather_data[1])
 
                 # Wait for bot TX rate limiter to allow next message
-                import asyncio
                 rate_limit = self.bot.config.getfloat('Bot', 'bot_tx_rate_limit_seconds', fallback=1.0)
                 # Use a conservative sleep time to avoid rate limiting
                 sleep_time = max(rate_limit + 1.0, 2.0)  # At least 2 seconds, or rate_limit + 1 second
@@ -739,6 +857,18 @@ class WxCommand(BaseCommand):
             return True
 
     async def get_weather_for_location(self, location: str, location_type: str, forecast_type: str = "default", num_days: int = 7, message: MeshMessage = None, using_companion_location: bool = False) -> str:
+        """Run the ordered synchronous geocode/NOAA workflow off the event loop."""
+        return await self._run_sync_provider_async(
+            self._get_weather_for_location_sync,
+            location,
+            location_type,
+            forecast_type,
+            num_days,
+            message,
+            using_companion_location,
+        )
+
+    def _get_weather_for_location_sync(self, location: str, location_type: str, forecast_type: str = "default", num_days: int = 7, message: MeshMessage = None, using_companion_location: bool = False) -> str:
         """Get weather data for a location (coordinates, zipcode, or city)
 
         Args:
@@ -917,6 +1047,9 @@ class WxCommand(BaseCommand):
             self.logger.error(f"Error geocoding zipcode {zipcode}: {e}")
             return None, None
 
+    async def _zipcode_to_lat_lon_async(self, zipcode: str) -> tuple:
+        return await self._run_sync_provider_async(self.zipcode_to_lat_lon, zipcode)
+
     def city_to_lat_lon(self, city: str) -> tuple:
         """Convert city name to latitude and longitude using default state"""
         try:
@@ -935,6 +1068,9 @@ class WxCommand(BaseCommand):
         except Exception as e:
             self.logger.error(f"Error geocoding city {city}: {e}")
             return None, None, None
+
+    async def _city_to_lat_lon_async(self, city: str) -> tuple:
+        return await self._run_sync_provider_async(self.city_to_lat_lon, city)
 
     def get_noaa_weather(self, lat: float, lon: float, return_periods: bool = False, max_length: int = 130) -> tuple:
         """Get weather forecast from NOAA and return both weather string and points data
@@ -1861,8 +1997,6 @@ class WxCommand(BaseCommand):
 
     async def _send_multiday_forecast(self, message: MeshMessage, forecast_text: str):
         """Send multi-day forecast response, splitting into multiple messages if needed"""
-        import asyncio
-
         # Get max message length dynamically
         max_length = self.get_max_message_length(message)
 
@@ -1940,6 +2074,9 @@ class WxCommand(BaseCommand):
             If return_full_data=True: (list of alert dicts, alert_count)
         """
         try:
+            if getattr(self, "_nws_alerts_available", None) is False:
+                return self.ERROR_FETCHING_DATA
+
             # Round coordinates to 4 decimal places to avoid API redirects
             lat_rounded = round(lat, 4)
             lon_rounded = round(lon, 4)
@@ -1949,11 +2086,23 @@ class WxCommand(BaseCommand):
             try:
                 alert_data = self.noaa_session.get(alert_url, timeout=self.url_timeout)
                 if not alert_data.ok:
-                    self.logger.warning(f"Error fetching weather alerts from NOAA: HTTP {alert_data.status_code}")
+                    if nws_http_means_no_coverage(alert_data.status_code):
+                        self._nws_alerts_available = False
+                        self.logger.warning(
+                            "NWS weather alerts unavailable (HTTP %s); NOAA alerts are US-only — "
+                            "skipping future alert requests",
+                            alert_data.status_code,
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Error fetching weather alerts from NOAA: HTTP {alert_data.status_code}"
+                        )
                     return self.ERROR_FETCHING_DATA
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self.logger.warning(f"Timeout/connection error fetching weather alerts from NOAA: {e}")
                 return self.ERROR_FETCHING_DATA
+
+            self._nws_alerts_available = True
 
             alerts = []  # Store structured alert data
             alertxml = xml.dom.minidom.parseString(alert_data.text)
@@ -2311,6 +2460,16 @@ class WxCommand(BaseCommand):
             self.logger.error(f"Error fetching NOAA weather alerts: {e}")
             return self.ERROR_FETCHING_DATA
 
+    async def _get_weather_alerts_noaa_async(
+        self, lat: float, lon: float, return_full_data: bool = False
+    ) -> tuple:
+        return await self._run_sync_provider_async(
+            self.get_weather_alerts_noaa,
+            lat,
+            lon,
+            return_full_data,
+        )
+
 
     def _differentiate_duplicate_statements(self, alerts: list) -> list:
         """Differentiate Special Statements that have the same event type by adding unique details
@@ -2482,120 +2641,24 @@ class WxCommand(BaseCommand):
     def _format_alert_compact(self, alert: dict, include_details: bool = True) -> str:
         """Format a single alert compactly
 
+        Shares its formatting with the proactive WeatherService broadcasts via
+        ``modules.alert_format``, so both localize from one code path.
+
         Args:
             alert: Alert dict with event, event_type, severity, expires, office, etc.
             include_details: If True, include expiration time and office
 
         Returns:
-            Formatted alert string
+            Formatted alert string, e.g. "🟠High Wind Warn til 6AM by NWS SEA"
         """
-        event = alert.get('event', '')
-        event_type = alert.get('event_type', '')
-        severity = alert.get('severity', 'Unknown')
-        expires = alert.get('expires', '')
-        office = alert.get('office', '')
-
-        # Get severity emoji
-        severity_emoji = {
-            'Extreme': '🔴',
-            'Severe': '🟠',
-            'Moderate': '🟡',
-            'Minor': '⚪',
-            'Unknown': '⚪'
-        }.get(severity, '⚪')
-
-        # Get event type emoji/indicator
-        {
-            'Warning': '⚠️',
-            'Watch': '👁️',
-            'Advisory': 'ℹ️',
-            'Statement': '📢'
-        }.get(event_type, '')
-
-        # Format event type abbreviation
-        event_type_abbrev = {
-            'Warning': 'Warn',
-            'Watch': 'Watch',
-            'Advisory': 'Adv',
-            'Statement': 'Stmt'
-        }.get(event_type, event_type)
-
-        # Build compact alert string
-        if include_details:
-            # Full format: "🟠High Wind Warn til 6AM by NWS SEA"
-            # Start with emoji directly concatenated to text (no space)
-            result = severity_emoji
-
-            # Add event and type
-            if event:
-                # Check if event already contains the event type to avoid duplication
-                event_lower = event.lower()
-                event_type_lower = event_type.lower()
-                if event_type_lower in event_lower:
-                    # Event already contains type (e.g., "High Wind Warning"), just use event
-                    event_short = event
-                    if len(event) > 15:
-                        # Take first words
-                        words = event.split()
-                        event_short = ' '.join(words[:2]) if len(words) > 2 else event[:15]
-                    result += event_short
-                else:
-                    # Event doesn't contain type, add it
-                    event_short = event
-                    if len(event) > 15:
-                        # Take first words
-                        words = event.split()
-                        event_short = ' '.join(words[:2]) if len(words) > 2 else event[:15]
-                    result += f"{event_short} {event_type_abbrev}"
-            else:
-                result += event_type_abbrev
-
-            # Add expiration time if available
-            if expires:
-                expires_compact = self.compact_time(expires)
-                # Extract just the time part
-                # "Dec 17 1AM" -> "til 1AM" (prefer just time for compactness)
-                # Check if it's in compact format with month name (from ISO parsing)
-                if any(month in expires_compact for month in ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]):
-                    # Has date, extract just time part for compactness
-                    time_match = re.search(r'(\d+)(AM|PM)', expires_compact, re.IGNORECASE)
-                    if time_match:
-                        hour = time_match.group(1)
-                        am_pm = time_match.group(2)
-                        expires_short = f" til {hour}{am_pm}"
-                    else:
-                        # Fallback: use compact version but limit length
-                        expires_short = f" til {expires_compact[:15]}"
-                else:
-                    # Try to extract time pattern from other formats
-                    time_match = re.search(r'(\d+):?(\d+)?(AM|PM)', expires_compact, re.IGNORECASE)
-                    if time_match:
-                        hour = time_match.group(1)
-                        am_pm = time_match.group(3)
-                        expires_short = f" til {hour}{am_pm}"
-                    else:
-                        # If no time pattern found, use compact version (truncated)
-                        expires_short = f" til {expires_compact[:15]}"
-                result += expires_short
-
-            # Add office if available (abbreviate city name)
-            if office:
-                # Extract city from office (e.g., "NWS Seattle WA" -> "NWS SEA")
-                office_parts = office.split()
-                if len(office_parts) >= 2:
-                    # Assume format: "NWS Seattle WA" or "NWS Seattle"
-                    office_org = office_parts[0]  # "NWS"
-                    city = office_parts[1] if len(office_parts) > 1 else ""
-                    city_abbrev = self.abbreviate_city_name(city)
-                    office_short = f" by {office_org} {city_abbrev}"
-                else:
-                    office_short = f" by {office[:10]}"  # Truncate
-                result += office_short
-
-            return result
-        else:
-            # Abbreviated format: just event type and severity
-            return f"{severity_emoji}{event} {event_type_abbrev}" if event else f"{severity_emoji}{event_type_abbrev}"
+        return alert_format.format_alert_compact(
+            alert,
+            self.response_translator,
+            include_details=include_details,
+            # !wx alerts has never shown the area description; the proactive
+            # broadcast does, so the shared helper keeps it optional.
+            include_location=False,
+        )
 
     def _format_alerts_compact_summary(self, alerts: list, alert_count: int, max_length: int = 130) -> str:
         """Format multiple alerts with prioritized first alert and summary of others
@@ -2629,27 +2692,14 @@ class WxCommand(BaseCommand):
             event = alert.get('event', '')
             event_type = alert.get('event_type', '')
 
-            # Get event type abbreviation
-            event_type_abbrev = {
-                'Warning': 'Warn',
-                'Watch': 'Watch',
-                'Advisory': 'Adv',
-                'Statement': 'Stmt'
-            }.get(event_type, event_type)
-
             # Get emoji for event type
             event_emoji = self._get_event_emoji(event, event_type)
 
-            # Build compact event string
+            # Build compact event string. Trimmed harder than the lead alert:
+            # first word only, since these are a comma-joined tail.
+            event_short = alert_format.shorten_event(event, limit=12, max_words=1)
+            event_type_abbrev = alert_format.event_type_abbrev(event_type, self.response_translator)
             if event:
-                # Abbreviate long event names
-                event_short = event
-                if len(event) > 12:
-                    words = event.split()
-                    if len(words) > 1:
-                        event_short = words[0]  # Just first word
-                    else:
-                        event_short = event[:12]
                 remaining_parts.append(f"{event_emoji}{event_short} {event_type_abbrev}")
             else:
                 remaining_parts.append(f"{event_emoji}{event_type_abbrev}")
@@ -2726,105 +2776,37 @@ class WxCommand(BaseCommand):
         Returns:
             Formatted alert string with start/stop times
         """
-        event = alert.get('event', '')
-        event_type = alert.get('event_type', '')
-        severity = alert.get('severity', 'Unknown')
-        effective = alert.get('effective', '')
-        expires = alert.get('expires', '')
-        office = alert.get('office', '')
-
-        # Get severity emoji
-        severity_emoji = {
-            'Extreme': '🔴',
-            'Severe': '🟠',
-            'Moderate': '🟡',
-            'Minor': '⚪',
-            'Unknown': '⚪'
-        }.get(severity, '⚪')
-
-        # Format event type
-        event_type_abbrev = {
-            'Warning': 'Warn',
-            'Watch': 'Watch',
-            'Advisory': 'Adv',
-            'Statement': 'Stmt'
-        }.get(event_type, event_type)
-
-        # Build parts
+        translator = self.response_translator
         parts = []
 
-        # Add index if provided
         if index is not None:
             parts.append(f"{index}.")
 
-        # Add severity emoji and event
-        if event:
-            # Check if event already contains the event type to avoid duplication
-            event_lower = event.lower()
-            event_type_lower = event_type.lower()
-            if event_type_lower in event_lower:
-                # Event already contains type (e.g., "High Wind Warning"), just use event
-                parts.append(f"{severity_emoji}{event}")
-            else:
-                # Event doesn't contain type, add it
-                parts.append(f"{severity_emoji}{event} {event_type_abbrev}")
-        else:
-            parts.append(f"{severity_emoji}{event_type_abbrev}")
+        # No trimming here — this form is sent across as many messages as it needs.
+        parts.append(
+            alert_format.severity_emoji(alert.get('severity', 'Unknown'))
+            + alert_format.format_event_label(
+                alert.get('event', ''), alert.get('event_type', ''), translator, limit=None
+            )
+        )
 
-        # Add times
-        time_parts = []
-        if effective:
-            effective_compact = self.compact_time(effective)
-            # Extract just the essential time info
-            # Try pattern: "December 16 at 3:12PM" or "Dec 16 3:12PM"
-            time_match = re.search(r'(\w+\s+\d+)\s+(?:at\s+)?(\d+):?(\d+)?(AM|PM)', effective_compact, re.IGNORECASE)
-            if time_match:
-                date_part = time_match.group(1)
-                hour = time_match.group(2)
-                am_pm = time_match.group(4)
-                time_parts.append(f"from {date_part} {hour}{am_pm}")
-            else:
-                # Fallback: just use compacted version, truncate if needed
-                effective_short = effective_compact[:25]
-                time_parts.append(f"from {effective_short}")
+        window = alert_format.format_alert_window(alert, translator)
+        if window:
+            parts.append(window)
 
-        if expires:
-            expires_compact = self.compact_time(expires)
-            # Extract time part
-            # Try pattern: "December 17 at 6:00AM" or "Dec 17 6AM"
-            time_match = re.search(r'(\w+\s+\d+)\s+(?:at\s+)?(\d+):?(\d+)?(AM|PM)', expires_compact, re.IGNORECASE)
-            if time_match:
-                date_part = time_match.group(1)
-                hour = time_match.group(2)
-                am_pm = time_match.group(4)
-                time_parts.append(f"til {date_part} {hour}{am_pm}")
-            else:
-                # Fallback: just use compacted version, truncate if needed
-                expires_short = expires_compact[:25]
-                time_parts.append(f"til {expires_short}")
-
-        if time_parts:
-            parts.append(" ".join(time_parts))
-
-        # Add office (abbreviated)
+        # The full form is not length-capped, so it keeps the longer fallback.
+        office = alert_format.format_office(alert.get('office', ''), translator, limit=15)
         if office:
-            office_parts = office.split()
-            if len(office_parts) >= 2:
-                office_org = office_parts[0]
-                city = office_parts[1]
-                city_abbrev = self.abbreviate_city_name(city)
-                parts.append(f"by {office_org} {city_abbrev}")
-            else:
-                parts.append(f"by {office[:15]}")
+            parts.append(office)
 
         return " ".join(parts)
 
     async def _send_full_alert_list(self, message: MeshMessage, lat: float, lon: float):
         """Send full list of alerts with details, splitting across multiple messages if needed"""
-        import asyncio
-
         # Get full alert data
-        alerts_result = self.get_weather_alerts_noaa(lat, lon, return_full_data=True)
+        alerts_result = await self._get_weather_alerts_noaa_async(
+            lat, lon, return_full_data=True
+        )
         if alerts_result == self.ERROR_FETCHING_DATA:
             await self.send_response(message, self.translate('commands.wx.error_fetching'))
             return
@@ -2945,155 +2927,12 @@ class WxCommand(BaseCommand):
 
     def abbreviate_city_name(self, city: str) -> str:
         """Abbreviate city names for compact display (e.g., Seattle -> SEA)"""
-        if not city:
-            return city
-
-        # Common city abbreviations
-        city_abbrevs = {
-            "Seattle": "SEA",
-            "Portland": "PDX",
-            "San Francisco": "SF",
-            "Los Angeles": "LA",
-            "New York": "NYC",
-            "Chicago": "CHI",
-            "Houston": "HOU",
-            "Phoenix": "PHX",
-            "Philadelphia": "PHL",
-            "San Antonio": "SAT",
-            "San Diego": "SAN",
-            "Dallas": "DAL",
-            "San Jose": "SJC",
-            "Austin": "AUS",
-            "Jacksonville": "JAX",
-            "Columbus": "CMH",
-            "Fort Worth": "FTW",
-            "Charlotte": "CLT",
-            "Denver": "DEN",
-            "Washington": "DC",
-            "Boston": "BOS",
-            "El Paso": "ELP",
-            "Detroit": "DTW",
-            "Nashville": "BNA",
-            "Oklahoma City": "OKC",
-            "Las Vegas": "LAS",
-            "Memphis": "MEM",
-            "Louisville": "SDF",
-            "Baltimore": "BWI",
-            "Milwaukee": "MKE",
-            "Albuquerque": "ABQ",
-            "Tucson": "TUS",
-            "Fresno": "FAT",
-            "Sacramento": "SAC",
-            "Kansas City": "KC",
-            "Mesa": "MSC",
-            "Atlanta": "ATL",
-            "Omaha": "OMA",
-            "Colorado Springs": "COS",
-            "Raleigh": "RDU",
-            "Virginia Beach": "ORF",
-            "Miami": "MIA",
-            "Oakland": "OAK",
-            "Minneapolis": "MSP",
-            "Tulsa": "TUL",
-            "Cleveland": "CLE",
-            "Wichita": "ICT",
-            "Arlington": "ARL",
-            "Tampa": "TPA",
-            "New Orleans": "MSY",
-            "Honolulu": "HNL",
-            "Anchorage": "ANC",
-            "Bellingham": "BLI",
-            "Everett": "EVE",
-            "Spokane": "GEG",
-            "Tacoma": "TAC",
-            "Yakima": "YKM",
-            "Olympia": "OLM",
-            "Vancouver": "YVR",
-            "Victoria": "YYJ"
-        }
-
-        # Check for exact match first
-        if city in city_abbrevs:
-            return city_abbrevs[city]
-
-        # Check for partial matches (e.g., "Seattle WA" -> "SEA")
-        for full_name, abbrev in city_abbrevs.items():
-            if full_name in city:
-                return abbrev
-
-        # If no match, try to create abbreviation from first letters of words
-        words = city.split()
-        if len(words) > 1:
-            # Take first letter of each word, up to 3-4 letters
-            abbrev = ''.join([w[0].upper() for w in words[:3]])
-            if len(abbrev) <= 4:
-                return abbrev
-
-        # Fallback: return first 3-4 uppercase letters
-        return city[:4].upper() if len(city) >= 4 else city.upper()
+        return alert_format.abbreviate_city_name(city)
 
     def compact_time(self, time_str: str) -> str:
         """Compact time format: '6:00AM' -> '6AM', 'December 16 at 3:12PM' -> 'Dec 16 3:12PM'
         Also handles ISO format: '2025-12-17T01:00:00-08:00' -> 'Dec 17 1AM'"""
-        if not time_str:
-            return time_str
-
-        # Check if it's ISO format (contains 'T' and looks like datetime)
-        if 'T' in time_str and re.match(r'\d{4}-\d{2}-\d{2}T', time_str):
-            try:
-                from datetime import datetime
-                # Parse ISO format
-                # Handle various ISO formats: 2025-12-17T01:00:00-08:00, 2025-12-17T01:0, etc.
-                # Try to parse with timezone info first
-                try:
-                    dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-                except:
-                    # Try without timezone
-                    dt_str = time_str.split('T')[0] + 'T' + time_str.split('T')[1].split('-')[0].split('+')[0]
-                    dt = datetime.fromisoformat(dt_str)
-
-                # Format as "Dec 17 1AM"
-                month_abbrevs = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                month = month_abbrevs[dt.month - 1]
-                day = dt.day
-                hour = dt.hour
-
-                # Convert to 12-hour format
-                if hour == 0:
-                    hour_12 = 12
-                    am_pm = "AM"
-                elif hour < 12:
-                    hour_12 = hour
-                    am_pm = "AM"
-                elif hour == 12:
-                    hour_12 = 12
-                    am_pm = "PM"
-                else:
-                    hour_12 = hour - 12
-                    am_pm = "PM"
-
-                return f"{month} {day} {hour_12}{am_pm}"
-            except Exception:
-                # If parsing fails, fall through to regular processing
-                pass
-
-        # Remove leading zeros from hours: "6:00AM" -> "6AM", "10:00PM" -> "10PM"
-        time_str = re.sub(r'(\d+):00(AM|PM)', r'\1\2', time_str)
-
-        # Abbreviate month names
-        month_abbrevs = {
-            "January": "Jan", "February": "Feb", "March": "Mar", "April": "Apr",
-            "May": "May", "June": "Jun", "July": "Jul", "August": "Aug",
-            "September": "Sep", "October": "Oct", "November": "Nov", "December": "Dec"
-        }
-        for full, abbrev in month_abbrevs.items():
-            time_str = time_str.replace(full, abbrev)
-
-        # Remove "at" before time: "December 16 at 3:12PM" -> "December 16 3:12PM"
-        time_str = re.sub(r'\s+at\s+', ' ', time_str)
-
-        return time_str
+        return alert_format.compact_time(time_str, self.response_translator)
 
     def abbreviate_wind_direction(self, direction: str) -> str:
         """Abbreviate wind direction to emoji + 2-3 characters"""
@@ -3190,7 +3029,8 @@ class WxCommand(BaseCommand):
                     low_val = int(low)
                     if _pair_ok(high_val, low_val):
                         return format_temperature_high_low(
-                            self.bot.config, high_val, low_val, units_str, self.logger
+                            self.bot.config, high_val, low_val, units_str, self.logger,
+                            translator=self.response_translator,
                         )
                 except ValueError:
                     continue
@@ -3201,7 +3041,8 @@ class WxCommand(BaseCommand):
                 low_val = int(low_match.group(1))
                 if _single_ok(low_val):
                     return format_temperature_high_low(
-                        self.bot.config, None, low_val, units_str, self.logger
+                        self.bot.config, None, low_val, units_str, self.logger,
+                        translator=self.response_translator,
                     )
             except ValueError:
                 pass
@@ -3212,7 +3053,8 @@ class WxCommand(BaseCommand):
                 high_val = int(high_match.group(1))
                 if _single_ok(high_val):
                     return format_temperature_high_low(
-                        self.bot.config, high_val, None, units_str, self.logger
+                        self.bot.config, high_val, None, units_str, self.logger,
+                        translator=self.response_translator,
                     )
             except ValueError:
                 pass

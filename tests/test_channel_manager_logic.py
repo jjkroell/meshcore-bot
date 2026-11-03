@@ -70,6 +70,12 @@ class TestChannelNumberLookup:
         cm._cache_valid = True
         assert cm.get_channel_number("general") == 0
 
+    def test_hash_prefix_ignored(self, cm):
+        cm._channels_cache = {0: {"channel_name": "#kod-bot"}}
+        cm._cache_valid = True
+        assert cm.get_channel_number("kod-bot") == 0
+        assert cm.get_channel_number("#kod-bot") == 0
+
 
 class TestCacheManagement:
     """Tests for cache invalidation."""
@@ -181,6 +187,38 @@ class TestFetchAllChannelsCacheLifecycle:
         # Should have aborted before fetching all 8 channels
         assert call_count < cm.max_channels
         assert channels == []
+        assert cm._cache_valid is False
+        cm._store_channels_in_db.assert_not_called()
+
+
+class TestFetchChannelsRetry:
+    """A connected node with no returned channels must not look ready (#266)."""
+
+    @pytest.mark.asyncio
+    async def test_retries_empty_scan_then_succeeds(self, cm):
+        cm.bot.connected = True
+        channel = {"channel_name": "general", "channel_idx": 0}
+        cm.fetch_all_channels = AsyncMock(side_effect=[[], [channel]])
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await cm.fetch_channels(max_attempts=3, retry_delay=0)
+
+        assert result is True
+        assert cm.fetch_all_channels.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_exhausted_empty_scans_fail_and_invalidate_cache(self, cm):
+        cm.bot.connected = True
+        cm._cache_valid = True
+        cm.fetch_all_channels = AsyncMock(return_value=[])
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await cm.fetch_channels(max_attempts=3, retry_delay=0)
+
+        assert result is False
+        assert cm.fetch_all_channels.await_count == 3
+        assert cm._cache_valid is False
+        assert cm.bot.meshcore.channels == {}
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +234,8 @@ class TestGetChannelByName:
         cm._cache_valid = True
         assert cm.get_channel_number("nonexistent") is None
 
-    def test_exact_name_lookup(self, cm):
-        """get_channel_number does a case-insensitive exact match (no # stripping)."""
+    def test_hash_prefixed_cache_matches_bare_name(self, cm):
         cm._channels_cache = {0: {"channel_name": "#general"}}
         cm._cache_valid = True
         assert cm.get_channel_number("#general") == 0
+        assert cm.get_channel_number("general") == 0

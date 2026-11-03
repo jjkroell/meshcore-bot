@@ -241,6 +241,55 @@ class TestGetMaxMessageLength:
         assert cmd.get_max_message_length(msg) == 147 - len("@[Kim 😀] ".encode("utf-8"))
 
 
+class TestFormatResponse:
+    """Tests for BaseCommand response placeholder formatting."""
+
+    def test_formats_hops_and_enhanced_path_from_routing_info(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(
+            content="path",
+            sender_id="alice",
+            path="raw fallback",
+            hops=2,
+            routing_info={"path_length": 2, "path_nodes": ["01", "5f"]},
+        )
+
+        result = cmd.format_response(msg, "{sender}|{path}|{hops}|{hops_label}")
+
+        assert result == "alice|01,5f (2 hops)|2|2 hops"
+
+    def test_formats_hops_from_path_suffix_when_hops_missing(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(
+            content="path",
+            path="01,5f (2 hops)",
+            hops=None,
+        )
+
+        result = cmd.format_response(msg, "{path}|{hops}|{hops_label}")
+
+        assert result == "01,5f (2 hops)|2|2 hops"
+
+    def test_formats_packet_hash_from_routing_info(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(
+            content="path",
+            routing_info={"packet_hash": "ABCDEF0123456789"},
+        )
+
+        result = cmd.format_response(msg, "{packet_hash}")
+
+        assert result == "ABCDEF0123456789"
+
+    def test_packet_hash_omitted_when_routing_info_missing(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(content="path")
+
+        result = cmd.format_response(msg, "hash={packet_hash}.")
+
+        assert result == "hash=."
+
+
 class TestCanExecute:
     """Tests for can_execute()."""
 
@@ -432,6 +481,17 @@ class TestCleanupMessageForMatching:
         msg = mock_message(content="testcmd")  # missing the ! prefix
         assert cmd.cleanup_message_for_matching(msg) == ""
 
+    def test_optional_command_prefix_allows_bare(self, command_mock_bot):
+        """require_command_prefix=false allows bare commands when prefix is configured."""
+        command_mock_bot.config.set("Bot", "respond_to_mentions", "false")
+        command_mock_bot.config.set("Bot", "command_prefix", "!")
+        command_mock_bot.config.set("Bot", "require_command_prefix", "false")
+        cmd = self._cmd(command_mock_bot)
+        msg = mock_message(content="testcmd")
+        assert cmd.cleanup_message_for_matching(msg) == "testcmd"
+        msg = mock_message(content="!testcmd")
+        assert cmd.cleanup_message_for_matching(msg) == "testcmd"
+
     # ---------------------------------------------- matches_keyword integration
     def test_matches_keyword_with_bot_mention(self, command_mock_bot):
         """matches_keyword uses cleanup_message_for_matching — @[bot] ping matches 'testcmd'."""
@@ -439,6 +499,8 @@ class TestCleanupMessageForMatching:
         cmd = self._cmd(command_mock_bot)
         msg = mock_message(content="@[TestBot] testcmd")
         assert cmd.matches_keyword(msg) is True
+        assert msg.content == "testcmd"
+        assert msg.original_content == "@[TestBot] testcmd"
 
     def test_matches_keyword_other_mention_blocked(self, command_mock_bot):
         """matches_keyword returns False when only another user is mentioned."""
@@ -446,3 +508,64 @@ class TestCleanupMessageForMatching:
         cmd = self._cmd(command_mock_bot)
         msg = mock_message(content="@[Alice] testcmd")
         assert cmd.matches_keyword(msg) is False
+        assert msg.content == "@[Alice] testcmd"
+
+
+class TestIssue267OverheardMentions:
+    """Mention stripping must not rewrite overheard traffic that names this radio (#267)."""
+
+    def _cmd(self, bot):
+        bot.meshcore = None
+        bot.config.set("Bot", "bot_name", "IU1IPB-1")
+        bot.config.set("Bot", "respond_to_mentions", "also")
+        return _TestCommand(bot)
+
+    def test_ack_self_mention_not_stripped_when_unmatched(self, command_mock_bot):
+        cmd = self._cmd(command_mock_bot)
+        body = "ack @[IU1IPB-1] | 9d12,aa11,4039 (3 hops)"
+        msg = mock_message(content=body)
+        assert cmd.matches_keyword(msg) is False
+        assert msg.content == body
+        assert msg.original_content == body
+
+    def test_leading_self_mention_not_stripped_when_unmatched(self, command_mock_bot):
+        cmd = self._cmd(command_mock_bot)
+        body = "@[IU1IPB-1] 3 hops dffd→0d28→8dbb"
+        msg = mock_message(content=body)
+        assert cmd.matches_keyword(msg) is False
+        assert msg.content == body
+        assert msg.original_content == body
+
+    def test_bare_at_callsign_unchanged(self, command_mock_bot):
+        cmd = self._cmd(command_mock_bot)
+        body = "[BOT_0531] @IU1IPB-1 | Hops: 2 | Path: Menconico T03>M.te Boletto>my-station"
+        msg = mock_message(content=body)
+        assert cmd.matches_keyword(msg) is False
+        assert msg.content == body
+        assert "@IU1IPB-1" in msg.content
+
+    def test_self_mention_command_still_matches(self, command_mock_bot):
+        cmd = self._cmd(command_mock_bot)
+        msg = mock_message(content="@[IU1IPB-1] testcmd")
+        assert cmd.matches_keyword(msg) is True
+        assert msg.content == "testcmd"
+        assert msg.original_content == "@[IU1IPB-1] testcmd"
+
+    def test_cleanup_does_not_rewrite_original_content(self, command_mock_bot):
+        cmd = self._cmd(command_mock_bot)
+        msg = mock_message(content="@[IU1IPB-1] testcmd")
+        cmd.cleanup_message_for_matching(msg)
+        assert msg.content == "testcmd"
+        assert msg.original_content == "@[IU1IPB-1] testcmd"
+
+    def test_overridden_matches_keyword_restores_unmatched(self, command_mock_bot):
+        """Subclass matchers that call cleanup must still restore overheard @[bot] text."""
+        from modules.commands.webviewer_command import WebViewerCommand
+
+        self._cmd(command_mock_bot)  # set bot_name / mention mode
+        cmd = WebViewerCommand(command_mock_bot)
+        body = "ack @[IU1IPB-1] | 9d12,aa11,4039 (3 hops)"
+        msg = mock_message(content=body)
+        assert cmd.matches_keyword(msg) is False
+        assert msg.content == body
+        assert msg.original_content == body

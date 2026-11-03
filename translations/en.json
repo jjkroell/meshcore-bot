@@ -1,37 +1,189 @@
 {
   "keywords": {
-    "help": ["help"],
-    "ping": ["ping"],
-    "test": ["test", "t"],
-    "wx": ["wx", "weather", "wxa", "wxalert"],
-    "gwx": ["gwx", "globalweather", "gwxa"],
-    "aqi": ["aqi", "air", "airquality", "air_quality"],
-    "aurora": ["aurora", "kp"],
-    "solar": ["solar"],
-    "sun": ["sun"],
-    "moon": ["moon"],
-    "hfcond": ["hfcond", "hf"],
-    "satpass": ["satpass"],
-    "sports": ["sports", "score", "scores"],
-    "stats": ["stats"],
-    "channels": ["channels", "channel"],
-    "path": ["path", "decode", "route"],
-    "prefix": ["prefix", "repeater", "lookup"],
-    "repeater": ["repeater", "repeaters", "rp"],
-    "solarforecast": ["sf", "solarforecast"],
-    "dice": ["dice"],
-    "roll": ["roll"],
-    "joke": ["joke", "jokes"],
-    "dadjoke": ["dadjoke", "dad joke", "dadjokes", "dad jokes"],
-    "catfact": ["catfact", "cat", "meow", "purr", "kitten"],
-    "dogfact": ["dogfact", "dog", "woof", "bark", "puppy"],
-    "hacker": ["hacker", "sudo", "ps aux", "grep", "ls -l", "ls -la", "echo $PATH"],
-    "hello": ["hello", "hi", "hey", "howdy", "greetings", "salutations", "good morning", "good afternoon", "good evening", "good night", "yo", "sup", "whats up", "what's up", "morning", "afternoon", "evening", "night", "gday", "g'day", "hola", "bonjour", "ciao", "namaste", "aloha", "shalom", "konnichiwa", "guten tag", "buenos dias", "buenas tardes", "buenas noches"],
-    "webviewer": ["webviewer", "web", "viewer", "wv"],
-    "cmd": ["cmd", "commands"],
-    "advert": ["advert"],
-    "multitest": ["multitest", "mt"],
-    "trace": ["trace", "tracer"]
+    "help": [
+      "help"
+    ],
+    "ping": [
+      "ping"
+    ],
+    "test": [
+      "test",
+      "t"
+    ],
+    "wx": [
+      "wx",
+      "weather",
+      "wxa",
+      "wxalert"
+    ],
+    "gwx": [
+      "gwx",
+      "globalweather",
+      "gwxa"
+    ],
+    "aqi": [
+      "aqi",
+      "air",
+      "airquality",
+      "air_quality"
+    ],
+    "rain": [
+      "rain",
+      "nowcast",
+      "snow"
+    ],
+    "aurora": [
+      "aurora",
+      "kp"
+    ],
+    "solar": [
+      "solar"
+    ],
+    "sun": [
+      "sun"
+    ],
+    "moon": [
+      "moon"
+    ],
+    "hfcond": [
+      "hfcond",
+      "hf"
+    ],
+    "satpass": [
+      "satpass"
+    ],
+    "sports": [
+      "sports",
+      "score",
+      "scores"
+    ],
+    "worldcup": [
+      "wc",
+      "worldcup"
+    ],
+    "stats": [
+      "stats"
+    ],
+    "channels": [
+      "channels",
+      "channel"
+    ],
+    "path": [
+      "path",
+      "decode",
+      "route"
+    ],
+    "prefix": [
+      "prefix",
+      "repeater",
+      "lookup"
+    ],
+    "repeater": [
+      "repeater",
+      "repeaters",
+      "rp"
+    ],
+    "solarforecast": [
+      "sf",
+      "solarforecast"
+    ],
+    "dice": [
+      "dice"
+    ],
+    "roll": [
+      "roll"
+    ],
+    "joke": [
+      "joke",
+      "jokes"
+    ],
+    "dadjoke": [
+      "dadjoke",
+      "dad joke",
+      "dadjokes",
+      "dad jokes"
+    ],
+    "catfact": [
+      "catfact",
+      "cat",
+      "meow",
+      "purr",
+      "kitten"
+    ],
+    "hacker": [
+      "hacker",
+      "sudo",
+      "ps aux",
+      "grep",
+      "ls -l",
+      "ls -la",
+      "echo $PATH"
+    ],
+    "hello": [
+      "hello",
+      "hi",
+      "hey",
+      "howdy",
+      "greetings",
+      "salutations",
+      "good morning",
+      "good afternoon",
+      "good evening",
+      "good night",
+      "yo",
+      "sup",
+      "whats up",
+      "what's up",
+      "morning",
+      "afternoon",
+      "evening",
+      "night",
+      "gday",
+      "g'day",
+      "hola",
+      "bonjour",
+      "ciao",
+      "namaste",
+      "aloha",
+      "shalom",
+      "konnichiwa",
+      "guten tag",
+      "buenos dias",
+      "buenas tardes",
+      "buenas noches"
+    ],
+    "webviewer": [
+      "webviewer",
+      "web",
+      "viewer",
+      "wv"
+    ],
+    "cmd": [
+      "cmd",
+      "commands"
+    ],
+    "advert": [
+      "advert"
+    ],
+    "neighbors": [
+      "neighbors",
+      "neighbours"
+    ],
+    "multitest": [
+      "multitest",
+      "mt"
+    ],
+    "trace": [
+      "trace",
+      "tracer"
+    ],
+    "dogfact": [
+      "dogfact",
+      "dog",
+      "woof",
+      "bark",
+      "puppy"
+    ]
   },
   "commands": {
     "help": {
@@ -60,8 +212,8 @@
           "description": "Get tomorrow's forecast"
         },
         {
-          "name": "7d",
-          "description": "Get 7-day forecast (also: 7-day, 2-7)"
+          "name": "Nd",
+          "description": "Get N-day forecast (e.g. 7d, 10d; also 7-day, 7, or 2–16)"
         },
         {
           "name": "hourly",
@@ -78,9 +230,15 @@
       "error": "Error getting weather data: {error}",
       "alerts": "{count} alerts: {text}",
       "tomorrow_not_available": "Tomorrow's forecast not available",
+      "hourly_not_available": "Hourly forecast not available",
       "tomorrow_error": "Error formatting tomorrow's forecast",
       "multiday_not_available": "{num_days}-day forecast not available",
-      "multiday_error": "Error formatting {num_days}-day forecast"
+      "multiday_error": "Error formatting {num_days}-day forecast",
+      "mqtt_forecast_not_supported": "Extended forecast is not available for MQTT weather sources",
+      "mqtt_weather_no_subscriber": "MQTT weather subscriber is not active (enable [MqttWeather] and custom.mqtt_weather.* topics)",
+      "mqtt_weather_no_data": "No MQTT weather message received for this topic yet",
+      "mqtt_weather_stale": "MQTT weather data is too old",
+      "mqtt_weather_payload_error": "MQTT weather payload error: {detail}"
     },
     "gwx": {
       "description": "Get weather information for any global location (usage: gwx Tokyo)",
@@ -94,6 +252,28 @@
       "tomorrow_error": "Error formatting tomorrow's forecast",
       "multiday_not_available": "{num_days}-day forecast not available",
       "multiday_error": "Error formatting {num_days}-day forecast",
+      "mqtt_forecast_not_supported": "Extended forecast is not available for MQTT weather sources",
+      "mqtt_weather_no_subscriber": "MQTT weather subscriber is not active (enable [MqttWeather] and custom.mqtt_weather.* topics)",
+      "mqtt_weather_no_data": "No MQTT weather message received for this topic yet",
+      "mqtt_weather_stale": "MQTT weather data is too old",
+      "mqtt_weather_payload_error": "MQTT weather payload error: {detail}",
+      "feels_like": "(feels {value}{unit})",
+      "humidity": "{value}%RH",
+      "dew_point": "💧{value}{unit}",
+      "visibility": "👁️{value}mi",
+      "visibility_km": "👁️{value}km",
+      "pressure": "📊{value}hPa",
+      "pressure_mmhg": "📊{value}mmHg",
+      "gust": "G{value}",
+      "day_abbrev": {
+        "Monday": "M",
+        "Tuesday": "T",
+        "Wednesday": "W",
+        "Thursday": "Th",
+        "Friday": "F",
+        "Saturday": "Sa",
+        "Sunday": "Su"
+      },
       "periods": {
         "today": "Today",
         "tonight": "Tonight",
@@ -137,7 +317,8 @@
         "thunderstorms": "⚠️ Thunderstorms",
         "heavy_snow": "⚠️ Heavy snow",
         "high_winds": "⚠️ High winds ({wind_speed} mph)"
-      }
+      },
+      "pressure_unit": "hpa"
     },
     "sports": {
       "description": "Get sports scores and schedules (usage: sports [team/league])",
@@ -152,6 +333,17 @@
       "no_games_league": "No games found for {sport}",
       "no_games_team": "No games found for {team}",
       "team_not_found": "Team/League '{team}' not found. Try: seahawks, mariners, sounders, kraken, storm, chiefs, lfc, mlb, nfl, mls, wnba, epl, etc."
+    },
+    "worldcup": {
+      "description": "FIFA World Cup scores, standings & nation results (in-season only)",
+      "help": "World Cup scores. Use 'wc' for today's games, 'wc group [A-L]' for standings, or 'wc [nation]' for a team's matches.",
+      "not_in_season": "No World Cup is currently in progress.",
+      "no_games_today": "No World Cup games today.",
+      "no_games_nation": "No World Cup matches found for {nation}.",
+      "groups_list": "World Cup groups: {groups}. Try 'wc group A'.",
+      "group_not_found": "Group '{group}' not found. Try a group letter, e.g. 'wc group A'.",
+      "nation_not_found": "Nation '{nation}' not found in the current World Cup.",
+      "error_fetching": "Error fetching World Cup data"
     },
     "stats": {
       "description": "Show statistics for past 24 hours. Use 'stats messages', 'stats channels', 'stats paths', or 'stats adverts' for specific stats.",
@@ -245,6 +437,18 @@
       "success": "Flood advert sent successfully!",
       "error": "Error sending flood advert: {error}"
     },
+    "neighbors": {
+      "description": "Runs a zero-hop neighbour discovery cycle (DM only)",
+      "disabled": "Neighbour discovery is not enabled. Set neighbors_enabled = true in the PacketCapture config.",
+      "busy": "A neighbour discovery cycle is already running. Try again once it finishes.",
+      "cooldown_active": "A neighbour discovery cycle ran recently. Please wait about {minutes} more minute(s) - discovery costs airtime for the whole mesh.",
+      "started": "Discovering neighbours - listening for about {seconds}s. I'll report back when done.",
+      "success": "Heard {count} neighbour(s), best SNR {best_snr}. Recorded {recorded} link(s).",
+      "published": "Published to {succeeded}/{attempted} broker(s).",
+      "none": "Discovery finished but no repeaters answered. Nothing is in direct range right now.",
+      "failed": "Neighbour discovery did not run: {reason}.",
+      "error": "Error running neighbour discovery: {error}"
+    },
     "path": {
       "description": "Decode hex path data to show which repeaters were involved in message routing",
       "help": "Path: path [hex] - Decode path to show repeaters. Use path alone for current message path, or path [7e,01] for specific path.",
@@ -263,6 +467,7 @@
       "continuation_end": "\n...",
       "truncation": "...",
       "unknown_name": "Unknown",
+      "repeater_resolution_deferred": "Path: {path}\n\n💡 Tip: Repeater identification requires {minimum_path_bytes}-byte paths.",
       "one_byte_notice": "Your device is using 1-byte IDs, which can cause ambiguous paths. Info: https://ridgeline.ve7kod.ca/hash-ids"
     },
     "multitest": {
@@ -374,6 +579,35 @@
         "comet": "Comets have thin atmospheres of water vapor and dust. AQI: Variable, but you'd freeze in space anyway. ☄️"
       }
     },
+    "rain": {
+      "description": "Rain/snow nowcast: when precip starts or stops in the next ~2h, with amount",
+      "help_rain": "Rain nowcast: when rain starts/stops in ~2h, with amount. rain [city|zip|lat,lon]. Also: snow",
+      "help_snow": "Snow nowcast: when snow starts/stops in ~2h, with depth. snow [city|zip|lat,lon]. Also: rain",
+      "usage": "Usage: rain|snow [city|zipcode|lat,lon]",
+      "usage_short": "Usage: rain|snow [city|zipcode|lat,lon]",
+      "starting": "{emoji} {ptype} starting in ~{minutes}min for {location}{extra}",
+      "stopping": "{emoji} {ptype} easing in ~{minutes}min for {location}",
+      "continuing": "{emoji} {ptype} steady for {window}+ in {location}",
+      "clear": "☀️ No {precip} expected in next {window} for {location}",
+      "changeover": "{from_emoji}→{to_emoji} {first} {when} → {second} in ~{minutes}min for {location}",
+      "now": "now",
+      "duration_for": " (~{duration}min)",
+      "duration_open": " (steady)",
+      "error_fetching": "Error fetching rain nowcast data",
+      "no_location": "Usage: rain [city|zipcode|lat,lon]. No location: will use companion location if known, or bot location if not.",
+      "no_location_city": "Could not find city '{location}' in {state}",
+      "no_location_zipcode": "Could not find ZIP code '{location}'",
+      "error": "Error: {error}",
+      "precip_types": {
+        "drizzle": "Drizzle",
+        "rain": "Rain",
+        "heavy_rain": "Heavy rain",
+        "freezing": "Freezing rain",
+        "snow": "Snow",
+        "showers": "Showers",
+        "thunder": "Thunderstorms"
+      }
+    },
     "aurora": {
       "description": "Get aurora forecast (KP index and probability) for a location",
       "usage": "Usage: aurora [city|zipcode|lat,lon]",
@@ -472,7 +706,7 @@
       "category_other": "🛰️ Other: ",
       "examples": "\nExamples:\n• satpass iss\n• satpass noaa15\n• satpass 25544\n• satpass 27607 visual (visual passes only)",
       "labels": {
-        "geostationary": "{satname} appears to be geostationary or has invalid pass data. Geostationary satellites don't have traditional passes - they remain in a fixed position relative to Earth.",
+        "geostationary": "{satname}: GEO (no LEO pass)",
         "no_passes": "{satname} has no {pass_type} passes in the next 10 days from this location",
         "invalid_norad": "Provide NORAD# example use:🛰️satpass 25544,33591"
       }
@@ -526,116 +760,6 @@
     },
     "dadjoke": {
       "description": "Get a random dad joke"
-    },
-    "dogfact": {
-      "description": "Get a random dog fact (hidden command)",
-      "error": "Woof? Something went wrong fetching your dog fact! 🐶",
-      "facts": [
-        "A dog's sense of smell is 10,000 to 100,000 times more acute than a human's. 👃",
-        "Dogs have three eyelids, including one to keep the eye moist and protected. 👁️",
-        "A dog's nose print is unique, much like a human fingerprint. 🐾",
-        "Dogs can hear sounds up to 47,000-65,000 Hz, far beyond the human limit of 20,000 Hz. 👂",
-        "The Basenji is the only dog breed that can't bark - it yodels instead. 🎵",
-        "Puppies are born deaf, blind, and toothless. 🍼",
-        "A dog's normal body temperature is 101-102.5°F (38.3-39.2°C). 🌡️",
-        "Dogs have about 1,700 taste buds; humans have around 9,000. 👅",
-        "The Greyhound can reach speeds of 45 mph, making it the fastest dog breed. 🏃",
-        "Dogs curl up in a ball to sleep to protect their organs and conserve body heat. 😴",
-        "A dog's whiskers help it sense objects and navigate in the dark. 📏",
-        "Dalmatian puppies are born completely white and develop their spots as they age. ⚪",
-        "Dogs' only sweat glands are between their paw pads. 🐾",
-        "The average dog is about as intelligent as a two-year-old child. 🧠",
-        "Dogs can smell diseases such as some cancers, diabetes, and impending seizures. 🩺",
-        "A dog's wet nose helps it absorb scent chemicals. 💧",
-        "Dogs dream, and studies show they enter REM sleep just like humans do. 💤",
-        "The tallest dog on record, a Great Dane named Zeus, stood 44 inches at the shoulder. 📐",
-        "The smallest dog on record was a Chihuahua just 3.8 inches tall. 🐕",
-        "Dogs tilt their heads to hear and locate sounds better and to see past their muzzles. 🤔",
-        "Petting a dog can lower blood pressure and reduce stress in humans. 🧘",
-        "Dogs have a special membrane in their eyes called the tapetum lucidum that helps them see in low light. 🌙",
-        "A dog's hearing is so sensitive it can identify its owner's car engine from a block away. 🚗",
-        "The Norwegian Lundehund has six toes on each foot and can bend its head backward to touch its spine. 🦴",
-        "Dogs process the world largely through smell - they have up to 300 million scent receptors. 👃",
-        "Three dogs survived the sinking of the Titanic. 🚢",
-        "A dog's sense of time is linked to smell - scents fade over the day, helping them anticipate routines. ⏰",
-        "The Saint Bernard and Newfoundland are among the heaviest breeds, often exceeding 150 pounds. ⚖️",
-        "Dogs kick backward after going to the bathroom to spread their scent using glands in their paws. 🐾",
-        "A wagging tail doesn't always mean a happy dog - it signals arousal, which can be positive or negative. 🚩",
-        "Dogs have 18 muscles controlling their ears. 👂",
-        "The oldest known dog breed is likely the Saluki, depicted in Egyptian art from around 2100 BC. 🏺",
-        "Dogs can learn more than 100 words and gestures. 📚",
-        "A Border Collie named Chaser learned the names of over 1,000 objects. 🎾",
-        "Dogs have belly buttons, left from the umbilical cord, though they're hard to see under fur. 🔎",
-        "Newfoundland dogs have water-resistant coats and webbed feet, making them excellent swimmers. 🏊",
-        "A dog's mouth exerts 150-300 pounds of pressure per square inch on average. 🦷",
-        "The phrase 'raining cats and dogs' may date to 17th-century England. 🌧️",
-        "Dogs sniff with each nostril separately, helping them determine which direction a smell came from. 🧭",
-        "A dog's shoulder blades are unattached to the skeleton, allowing greater flexibility for running. 🦴",
-        "Bloodhounds can follow a scent trail more than 130 hours old across long distances. 🔦",
-        "Dogs have been human companions for at least 15,000 years, and possibly over 30,000. 🌍",
-        "The Chow Chow and the Shar-Pei are the only breeds with fully black tongues. 👅",
-        "Small dog breeds tend to live longer than large breeds, sometimes by several years. 📅",
-        "A dog's nose is typically cool and moist because of mucus and evaporation, not health status. 👃",
-        "Dogs can get jealous when their owner shows affection to another animal. 💔",
-        "The Beatles song 'A Day in the Life' contains a whistle only dogs can hear. 🎶",
-        "A dog's paw pads contain a network of blood vessels that keep them from freezing on cold ground. ❄️",
-        "Puppies sleep 18-20 hours a day during their fastest growth period. 🛌",
-        "Dogs have a 'righting reflex' that helps them reorient when falling, though less refined than a cat's. 🤸",
-        "The Portuguese Water Dog was bred to herd fish into nets and retrieve gear from the water. 🎣",
-        "A dog's field of vision is about 250 degrees, compared to about 190 degrees for humans. 👀",
-        "Dogs see best in blue and yellow; they can't distinguish red from green. 🌈",
-        "The Australian Cattle Dog 'Bluey' lived to 29 years, one of the oldest dogs ever recorded. 🎂",
-        "Dogs yawn contagiously in response to their owners, a sign of empathy and bonding. 🥱",
-        "Dogs' ancestors, wolves, were likely drawn to early human camps by food scraps. 🔥",
-        "A dog's heart beats 60-140 times per minute, depending on its size. ❤️",
-        "The Labrador Retriever has been the most popular dog breed in the US for decades. 🏆",
-        "Dogs can be trained to detect a change in a person's scent seconds before a medical emergency. 🚑",
-        "Puppies have 28 baby teeth that are replaced by 42 adult teeth. 🦷",
-        "The Alaskan Malamute was bred to haul heavy freight; the Siberian Husky was bred for speed. 🛷",
-        "A dog can pinpoint the source of a sound in about six hundredths of a second. ⏱️",
-        "The Chihuahua, the smallest recognized breed, originated in Mexico. 🇲🇽",
-        "Dogs can be trained to detect dangerously low blood sugar in people with diabetes. 🩸",
-        "A dog's hearing is roughly four times more sensitive than a human's. 👂",
-        "Puppies open their eyes around 10 to 14 days after birth. 👀",
-        "The Saint Bernard was bred by Alpine monks for mountain rescue work. ⛰️",
-        "A dog's tail is a continuation of its spine, made of many small vertebrae. 🦴",
-        "The Australian Shepherd was actually developed in the western United States. 🇺🇸",
-        "The Pug was bred as a lap dog for the emperors of China. 👑",
-        "A dog's brain devotes about 40 times more area to smell than a human brain does. 🧠",
-        "The Bloodhound's long ears and loose skin help sweep scent toward its nose. 👃",
-        "The Dachshund's name means badger dog in German; it was bred to dig into burrows. 🦡",
-        "The Rhodesian Ridgeback has a ridge of backward-growing hair along its spine. 〰️",
-        "A dog's mouth is not cleaner than a human's; it simply carries different bacteria. 🦠",
-        "Greyhound-type dogs appear in Egyptian art more than 4,000 years old. 🏺",
-        "The Komondor's corded coat helped shield it from wolf bites while guarding flocks. 🐑",
-        "Puppies are born without kneecaps, which form at around six months of age. 🦵",
-        "In a study, a Border Collie named Rico recognized more than 200 spoken words. 📚",
-        "The Poodle's fancy show trim began as a practical cut for retrieving in cold water. ✂️",
-        "The Xoloitzcuintli, or Mexican Hairless Dog, was considered sacred by the Aztecs. 🇲🇽",
-        "Dogs dream more often as puppies and as seniors than in middle age. 💤",
-        "The Great Dane was developed in Germany, where it is called the Deutsche Dogge. 🇩🇪",
-        "Small dogs' hearts beat faster than large dogs' hearts. ❤️",
-        "The word canine comes from the Latin canis, meaning dog. 📜",
-        "The Afghan Hound is one of the most ancient breeds, genetically close to early dogs. 🐺",
-        "The Labrador Retriever originated on the island of Newfoundland, not Labrador. 🇨🇦",
-        "A dog's nose works in stereo, helping it sense which direction a smell comes from. 🎧",
-        "The Cavalier King Charles Spaniel is named for King Charles II, who doted on the breed. 👑",
-        "Dogs have a scent-detecting Jacobson's organ in the roof of the mouth. 👃",
-        "The Pekingese was bred to resemble a lion and was once owned only by Chinese royalty. 🦁",
-        "Dogs can smell shifts in human body chemistry linked to fear and stress. 😨",
-        "The Weimaraner is nicknamed the Grey Ghost for its silvery coat and pale eyes. 👻",
-        "The Shih Tzu's name means little lion in Mandarin. 🦁",
-        "Puppies learn bite inhibition from their mother and littermates before eight weeks old. 🐾",
-        "The Bernese Mountain Dog was bred to pull carts of milk and cheese in Switzerland. 🧀",
-        "The Irish Wolfhound is the tallest breed by average height, over seven feet tall on its hind legs. 📐",
-        "Dogs process word meaning with the left brain and tone with the right, much like people. 🧠",
-        "The Akita was bred in Japan to hunt bears and symbolizes health and long life. 🇯🇵",
-        "The Boxer is named for its habit of boxing with its front paws during play. 🥊",
-        "The Samoyed's upturned smile helps keep it from drooling and forming icicles. ❄️",
-        "Floppy ears may be a side effect of tameness, part of so-called domestication syndrome. 🧬",
-        "Dogs can follow a human's pointing gesture to find hidden food, a skill even chimps find hard. 👉",
-        "The Dalmatian historically ran alongside horse-drawn carriages as a guard dog. 🐎"
-      ]
     },
     "catfact": {
       "description": "Get a random cat fact (hidden command)",
@@ -1040,47 +1164,150 @@
       "help": "Responds to greetings with robot-themed responses",
       "response_format": "I'm {bot_name}.",
       "greeting_openings": [
-        "Hello", "Greetings", "Salutations", "Hi", "Hey", "Howdy", "Yo", "Sup",
-        "What's up", "Good day", "Well met", "Hail", "Ahoy", "Bonjour", "Hola",
-        "Ciao", "Namaste", "Aloha", "Shalom", "Konnichiwa", "Guten tag", "G'day",
-        "How goes it", "What's good", "Peace", "Respect", "Blessings", "Cheers",
-        "Welcome", "Nice to see you", "Pleasure to meet you", "Good to see you",
-        "Long time no see", "Fancy meeting you here"
+        "Hello",
+        "Greetings",
+        "Salutations",
+        "Hi",
+        "Hey",
+        "Howdy",
+        "Yo",
+        "Sup",
+        "What's up",
+        "Good day",
+        "Well met",
+        "Hail",
+        "Ahoy",
+        "Bonjour",
+        "Hola",
+        "Ciao",
+        "Namaste",
+        "Aloha",
+        "Shalom",
+        "Konnichiwa",
+        "Guten tag",
+        "G'day",
+        "How goes it",
+        "What's good",
+        "Peace",
+        "Respect",
+        "Blessings",
+        "Cheers",
+        "Welcome",
+        "Nice to see you",
+        "Pleasure to meet you",
+        "Good to see you",
+        "Long time no see",
+        "Fancy meeting you here"
       ],
       "morning_greetings": [
-        "Good morning", "Top o' the morning", "Buenos dias", "Bonjour",
-        "Guten morgen", "Buongiorno", "Bom dia", "Dobro jutro", "Dobroye utro",
-        "Selamat pagi", "Ohayou gozaimasu", "Sabah al-khair", "Boker tov"
+        "Good morning",
+        "Top o' the morning",
+        "Buenos dias",
+        "Bonjour",
+        "Guten morgen",
+        "Buongiorno",
+        "Bom dia",
+        "Dobro jutro",
+        "Dobroye utro",
+        "Selamat pagi",
+        "Ohayou gozaimasu",
+        "Sabah al-khair",
+        "Boker tov"
       ],
       "afternoon_greetings": [
-        "Good afternoon", "Buenas tardes", "Boa tarde", "Dobro dan",
-        "Dobryy den", "Selamat siang", "Konnichiwa", "Ahlan bi-nahar",
+        "Good afternoon",
+        "Buenas tardes",
+        "Boa tarde",
+        "Dobro dan",
+        "Dobryy den",
+        "Selamat siang",
+        "Konnichiwa",
+        "Ahlan bi-nahar",
         "Tzoharaim tovim"
       ],
       "evening_greetings": [
-        "Good evening", "Buenas noches", "Boa noite", "Dobro veče",
-        "Dobryy vecher", "Selamat malam", "Konbanwa", "Ahlan bi-layl",
+        "Good evening",
+        "Buenas noches",
+        "Boa noite",
+        "Dobro veče",
+        "Dobryy vecher",
+        "Selamat malam",
+        "Konbanwa",
+        "Ahlan bi-layl",
         "Erev tov"
       ],
       "human_descriptors": [
-        "human", "carbon-based lifeform", "organic entity", "biological unit",
-        "flesh creature", "meat-based organism", "carbon unit", "organic being",
-        "biological entity", "meat-based lifeform", "carbon creature", "flesh unit",
-        "organic organism", "biological creature", "meat mech", "flesh bot", "organic automaton",
-        "biological android", "carbon construct", "flesh drone", "organic robot",
-        "biological machine", "meat cyborg", "flesh android", "organic droid", "biological bot",
-        "carbon android", "meat unit", "flesh construct", "organic mech", "biological droid",
-        "meat-based bot", "flesh-based unit", "organic-based entity", "biological-based organism",
-        "carbon-based unit", "meat-based entity", "flesh-based creature", "organic-based unit",
-        "DNA-based lifeform", "neural network user", "bipedal mammal",
-        "water-based organism", "protein assembler", "ATP consumer",
-        "cellular automaton", "genetic algorithm", "biochemical processor",
+        "human",
+        "carbon-based lifeform",
+        "organic entity",
+        "biological unit",
+        "flesh creature",
+        "meat-based organism",
+        "carbon unit",
+        "organic being",
+        "biological entity",
+        "meat-based lifeform",
+        "carbon creature",
+        "flesh unit",
+        "organic organism",
+        "biological creature",
+        "meat mech",
+        "flesh bot",
+        "organic automaton",
+        "biological android",
+        "carbon construct",
+        "flesh drone",
+        "organic robot",
+        "biological machine",
+        "meat cyborg",
+        "flesh android",
+        "organic droid",
+        "biological bot",
+        "carbon android",
+        "meat unit",
+        "flesh construct",
+        "organic mech",
+        "biological droid",
+        "meat-based bot",
+        "flesh-based unit",
+        "organic-based entity",
+        "biological-based organism",
+        "carbon-based unit",
+        "meat-based entity",
+        "flesh-based creature",
+        "organic-based unit",
+        "DNA-based lifeform",
+        "neural network user",
+        "bipedal mammal",
+        "water-based organism",
+        "protein assembler",
+        "ATP consumer",
+        "cellular automaton",
+        "genetic algorithm",
+        "biochemical processor",
         "metabolic engine",
-        "human friend", "fellow sentient being", "earthling", "fellow traveler",
-        "kindred spirit", "digital companion", "friend", "buddy", "pal", "mate",
-        "fellow human", "earth dweller", "terrestrial being", "planet walker",
-        "humanoid", "organic", "biological", "carbon-based buddy",
-        "flesh-based friend", "organic pal", "biological buddy", "carbon companion"
+        "human friend",
+        "fellow sentient being",
+        "earthling",
+        "fellow traveler",
+        "kindred spirit",
+        "digital companion",
+        "friend",
+        "buddy",
+        "pal",
+        "mate",
+        "fellow human",
+        "earth dweller",
+        "terrestrial being",
+        "planet walker",
+        "humanoid",
+        "organic",
+        "biological",
+        "carbon-based buddy",
+        "flesh-based friend",
+        "organic pal",
+        "biological buddy",
+        "carbon companion"
       ],
       "emoji_responses": {
         "🖖": [
@@ -1173,6 +1400,120 @@
     },
     "cmd": {
       "description": "List available commands"
+    },
+    "contact": {
+      "help": "Display the bot's contact information",
+      "unavailable": "Contact info unavailable: the radio has not reported its identity yet."
+    },
+    "dogfact": {
+      "description": "Get a random dog fact (hidden command)",
+      "error": "Woof? Something went wrong fetching your dog fact! 🐶",
+      "facts": [
+        "A dog's sense of smell is 10,000 to 100,000 times more acute than a human's. 👃",
+        "Dogs have three eyelids, including one to keep the eye moist and protected. 👁️",
+        "A dog's nose print is unique, much like a human fingerprint. 🐾",
+        "Dogs can hear sounds up to 47,000-65,000 Hz, far beyond the human limit of 20,000 Hz. 👂",
+        "The Basenji is the only dog breed that can't bark - it yodels instead. 🎵",
+        "Puppies are born deaf, blind, and toothless. 🍼",
+        "A dog's normal body temperature is 101-102.5°F (38.3-39.2°C). 🌡️",
+        "Dogs have about 1,700 taste buds; humans have around 9,000. 👅",
+        "The Greyhound can reach speeds of 45 mph, making it the fastest dog breed. 🏃",
+        "Dogs curl up in a ball to sleep to protect their organs and conserve body heat. 😴",
+        "A dog's whiskers help it sense objects and navigate in the dark. 📏",
+        "Dalmatian puppies are born completely white and develop their spots as they age. ⚪",
+        "Dogs' only sweat glands are between their paw pads. 🐾",
+        "The average dog is about as intelligent as a two-year-old child. 🧠",
+        "Dogs can smell diseases such as some cancers, diabetes, and impending seizures. 🩺",
+        "A dog's wet nose helps it absorb scent chemicals. 💧",
+        "Dogs dream, and studies show they enter REM sleep just like humans do. 💤",
+        "The tallest dog on record, a Great Dane named Zeus, stood 44 inches at the shoulder. 📐",
+        "The smallest dog on record was a Chihuahua just 3.8 inches tall. 🐕",
+        "Dogs tilt their heads to hear and locate sounds better and to see past their muzzles. 🤔",
+        "Petting a dog can lower blood pressure and reduce stress in humans. 🧘",
+        "Dogs have a special membrane in their eyes called the tapetum lucidum that helps them see in low light. 🌙",
+        "A dog's hearing is so sensitive it can identify its owner's car engine from a block away. 🚗",
+        "The Norwegian Lundehund has six toes on each foot and can bend its head backward to touch its spine. 🦴",
+        "Dogs process the world largely through smell - they have up to 300 million scent receptors. 👃",
+        "Three dogs survived the sinking of the Titanic. 🚢",
+        "A dog's sense of time is linked to smell - scents fade over the day, helping them anticipate routines. ⏰",
+        "The Saint Bernard and Newfoundland are among the heaviest breeds, often exceeding 150 pounds. ⚖️",
+        "Dogs kick backward after going to the bathroom to spread their scent using glands in their paws. 🐾",
+        "A wagging tail doesn't always mean a happy dog - it signals arousal, which can be positive or negative. 🚩",
+        "Dogs have 18 muscles controlling their ears. 👂",
+        "The oldest known dog breed is likely the Saluki, depicted in Egyptian art from around 2100 BC. 🏺",
+        "Dogs can learn more than 100 words and gestures. 📚",
+        "A Border Collie named Chaser learned the names of over 1,000 objects. 🎾",
+        "Dogs have belly buttons, left from the umbilical cord, though they're hard to see under fur. 🔎",
+        "Newfoundland dogs have water-resistant coats and webbed feet, making them excellent swimmers. 🏊",
+        "A dog's mouth exerts 150-300 pounds of pressure per square inch on average. 🦷",
+        "The phrase 'raining cats and dogs' may date to 17th-century England. 🌧️",
+        "Dogs sniff with each nostril separately, helping them determine which direction a smell came from. 🧭",
+        "A dog's shoulder blades are unattached to the skeleton, allowing greater flexibility for running. 🦴",
+        "Bloodhounds can follow a scent trail more than 130 hours old across long distances. 🔦",
+        "Dogs have been human companions for at least 15,000 years, and possibly over 30,000. 🌍",
+        "The Chow Chow and the Shar-Pei are the only breeds with fully black tongues. 👅",
+        "Small dog breeds tend to live longer than large breeds, sometimes by several years. 📅",
+        "A dog's nose is typically cool and moist because of mucus and evaporation, not health status. 👃",
+        "Dogs can get jealous when their owner shows affection to another animal. 💔",
+        "The Beatles song 'A Day in the Life' contains a whistle only dogs can hear. 🎶",
+        "A dog's paw pads contain a network of blood vessels that keep them from freezing on cold ground. ❄️",
+        "Puppies sleep 18-20 hours a day during their fastest growth period. 🛌",
+        "Dogs have a 'righting reflex' that helps them reorient when falling, though less refined than a cat's. 🤸",
+        "The Portuguese Water Dog was bred to herd fish into nets and retrieve gear from the water. 🎣",
+        "A dog's field of vision is about 250 degrees, compared to about 190 degrees for humans. 👀",
+        "Dogs see best in blue and yellow; they can't distinguish red from green. 🌈",
+        "The Australian Cattle Dog 'Bluey' lived to 29 years, one of the oldest dogs ever recorded. 🎂",
+        "Dogs yawn contagiously in response to their owners, a sign of empathy and bonding. 🥱",
+        "Dogs' ancestors, wolves, were likely drawn to early human camps by food scraps. 🔥",
+        "A dog's heart beats 60-140 times per minute, depending on its size. ❤️",
+        "The Labrador Retriever has been the most popular dog breed in the US for decades. 🏆",
+        "Dogs can be trained to detect a change in a person's scent seconds before a medical emergency. 🚑",
+        "Puppies have 28 baby teeth that are replaced by 42 adult teeth. 🦷",
+        "The Alaskan Malamute was bred to haul heavy freight; the Siberian Husky was bred for speed. 🛷",
+        "A dog can pinpoint the source of a sound in about six hundredths of a second. ⏱️",
+        "The Chihuahua, the smallest recognized breed, originated in Mexico. 🇲🇽",
+        "Dogs can be trained to detect dangerously low blood sugar in people with diabetes. 🩸",
+        "A dog's hearing is roughly four times more sensitive than a human's. 👂",
+        "Puppies open their eyes around 10 to 14 days after birth. 👀",
+        "The Saint Bernard was bred by Alpine monks for mountain rescue work. ⛰️",
+        "A dog's tail is a continuation of its spine, made of many small vertebrae. 🦴",
+        "The Australian Shepherd was actually developed in the western United States. 🇺🇸",
+        "The Pug was bred as a lap dog for the emperors of China. 👑",
+        "A dog's brain devotes about 40 times more area to smell than a human brain does. 🧠",
+        "The Bloodhound's long ears and loose skin help sweep scent toward its nose. 👃",
+        "The Dachshund's name means badger dog in German; it was bred to dig into burrows. 🦡",
+        "The Rhodesian Ridgeback has a ridge of backward-growing hair along its spine. 〰️",
+        "A dog's mouth is not cleaner than a human's; it simply carries different bacteria. 🦠",
+        "Greyhound-type dogs appear in Egyptian art more than 4,000 years old. 🏺",
+        "The Komondor's corded coat helped shield it from wolf bites while guarding flocks. 🐑",
+        "Puppies are born without kneecaps, which form at around six months of age. 🦵",
+        "In a study, a Border Collie named Rico recognized more than 200 spoken words. 📚",
+        "The Poodle's fancy show trim began as a practical cut for retrieving in cold water. ✂️",
+        "The Xoloitzcuintli, or Mexican Hairless Dog, was considered sacred by the Aztecs. 🇲🇽",
+        "Dogs dream more often as puppies and as seniors than in middle age. 💤",
+        "The Great Dane was developed in Germany, where it is called the Deutsche Dogge. 🇩🇪",
+        "Small dogs' hearts beat faster than large dogs' hearts. ❤️",
+        "The word canine comes from the Latin canis, meaning dog. 📜",
+        "The Afghan Hound is one of the most ancient breeds, genetically close to early dogs. 🐺",
+        "The Labrador Retriever originated on the island of Newfoundland, not Labrador. 🇨🇦",
+        "A dog's nose works in stereo, helping it sense which direction a smell comes from. 🎧",
+        "The Cavalier King Charles Spaniel is named for King Charles II, who doted on the breed. 👑",
+        "Dogs have a scent-detecting Jacobson's organ in the roof of the mouth. 👃",
+        "The Pekingese was bred to resemble a lion and was once owned only by Chinese royalty. 🦁",
+        "Dogs can smell shifts in human body chemistry linked to fear and stress. 😨",
+        "The Weimaraner is nicknamed the Grey Ghost for its silvery coat and pale eyes. 👻",
+        "The Shih Tzu's name means little lion in Mandarin. 🦁",
+        "Puppies learn bite inhibition from their mother and littermates before eight weeks old. 🐾",
+        "The Bernese Mountain Dog was bred to pull carts of milk and cheese in Switzerland. 🧀",
+        "The Irish Wolfhound is the tallest breed by average height, over seven feet tall on its hind legs. 📐",
+        "Dogs process word meaning with the left brain and tone with the right, much like people. 🧠",
+        "The Akita was bred in Japan to hunt bears and symbolizes health and long life. 🇯🇵",
+        "The Boxer is named for its habit of boxing with its front paws during play. 🥊",
+        "The Samoyed's upturned smile helps keep it from drooling and forming icicles. ❄️",
+        "Floppy ears may be a side effect of tameness, part of so-called domestication syndrome. 🧬",
+        "Dogs can follow a human's pointing gesture to find hidden food, a skill even chimps find hard. 👉",
+        "The Dalmatian historically ran alongside horse-drawn carriages as a guard dog. 🐎"
+      ]
     }
   },
   "elapsed": {
@@ -1202,6 +1543,8 @@
     "no_help_available": "No help available for this command.",
     "snr_label": "SNR: {value} dB",
     "rssi_label": "RSSI: {value} dBm",
+    "temp_high_label": "H",
+    "temp_low_label": "L",
     "date_time": {
       "day_abbreviations": {
         "Mon": "Mon",
@@ -1249,6 +1592,39 @@
         "November": "November",
         "December": "December"
       }
+    },
+    "alerts": {
+      "event_types": {
+        "Warning": "Warn",
+        "Watch": "Watch",
+        "Advisory": "Adv",
+        "Statement": "Stmt"
+      },
+      "til": "til",
+      "by": "by",
+      "from": "from",
+      "am": "AM",
+      "pm": "PM",
+      "time_12h": "{hour}{meridiem}",
+      "date_12h": "{month} {day} {time}"
+    },
+    "wind_directions": {
+      "N": "N",
+      "NNE": "NNE",
+      "NE": "NE",
+      "ENE": "ENE",
+      "E": "E",
+      "ESE": "ESE",
+      "SE": "SE",
+      "SSE": "SSE",
+      "S": "S",
+      "SSW": "SSW",
+      "SW": "SW",
+      "WSW": "WSW",
+      "W": "W",
+      "WNW": "WNW",
+      "NW": "NW",
+      "NNW": "NNW"
     }
   },
   "categories": {
@@ -1261,5 +1637,67 @@
     "analytics": "Analytics Commands",
     "meshcore_info": "MeshCore Info Commands",
     "management": "Management Commands"
+  },
+  "services": {
+    "darcmowas": {
+      "messagetype": {
+        "eu-alert-level-1": "Emergency Alert",
+        "eu-alert-level-2": "Extreme Danger",
+        "eu-alert-level-3": "Significant Danger",
+        "eu-alert-level-4": "Danger Information",
+        "eu-test": "Test Warning"
+      },
+      "fields": {
+        "sender": "Sender: {sender}",
+        "area": "Area: {areas}"
+      }
+    },
+    "weather_service": {
+      "daily_weather": "Daily Weather",
+      "tomorrow": "Tomorrow",
+      "error_fetching": "Error fetching weather data",
+      "no_data": "No forecast data available",
+      "near": "near",
+      "est": "est",
+      "steady": "steady",
+      "rain_starting": "{emoji} Heads up — {ptype} starting in ~{minutes}min{est}{steady}{temp}{location}",
+      "rain_ending": "{emoji} Heads up — {ptype} ending in ~{minutes}min{est}{temp}{location}",
+      "weather_descriptions": {
+        "0": "Clear",
+        "1": "Mostly Clear",
+        "2": "Partly Cloudy",
+        "3": "Overcast",
+        "45": "Foggy",
+        "48": "Depositing Rime Fog",
+        "51": "Light Drizzle",
+        "53": "Moderate Drizzle",
+        "55": "Dense Drizzle",
+        "56": "Light Freezing Drizzle",
+        "57": "Dense Freezing Drizzle",
+        "61": "Slight Rain",
+        "63": "Moderate Rain",
+        "65": "Heavy Rain",
+        "66": "Light Freezing Rain",
+        "67": "Heavy Freezing Rain",
+        "71": "Slight Snow",
+        "73": "Moderate Snow",
+        "75": "Heavy Snow",
+        "77": "Snow Grains",
+        "80": "Slight Rain Showers",
+        "81": "Moderate Rain Showers",
+        "82": "Violent Rain Showers",
+        "85": "Slight Snow Showers",
+        "86": "Heavy Snow Showers",
+        "95": "Thunderstorm",
+        "96": "Thunderstorm w/Hail",
+        "99": "Severe Thunderstorm"
+      },
+      "wind_speed_units": {
+        "ms": "m/s",
+        "mph": "mph",
+        "kmh": "km/h",
+        "kn": "kn"
+      }
+    }
   }
 }

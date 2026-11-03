@@ -139,6 +139,25 @@ class TestFloodScopeKeysLoading:
         result = cm._load_flood_scope_keys()
         assert result == {}
 
+    def test_flood_scopes_in_bot_section_fallback(self):
+        config = configparser.ConfigParser()
+        config.add_section("Bot")
+        config.set("Bot", "bot_name", "TestBot")
+        config.set("Bot", "flood_scopes", "w-wa, *")
+        config.add_section("Channels")
+        config.set("Channels", "monitor_channels", "general")
+        bot = MagicMock()
+        bot.logger = Mock()
+        bot.config = config
+        cm = object.__new__(CommandManager)
+        cm.bot = bot
+        cm.logger = Mock()
+        cm.flood_scope_allow_global = False
+        result = cm._load_flood_scope_keys()
+        assert "#w-wa" in result
+        assert cm.flood_scope_allow_global is True
+        cm.logger.warning.assert_called_once()
+
     def test_star_excluded_from_scope_keys(self):
         bot = MagicMock()
         bot.logger = Mock()
@@ -289,6 +308,53 @@ async def test_send_response_passes_none_scope_when_unset():
     assert kwargs.get("scope") is None
 
 
+@pytest.mark.asyncio
+async def test_send_response_forwards_command_id_to_channel_send():
+    """Optional command_id is passed to send_channel_message for repeat tracking."""
+    bot = MagicMock()
+    bot.logger = Mock()
+    bot.config = make_config()
+    bot.connected = True
+    bot.meshcore = MagicMock()
+
+    cm = object.__new__(CommandManager)
+    cm.bot = bot
+    cm.logger = bot.logger
+    cm.send_channel_message = AsyncMock(return_value=True)
+    cm.get_rate_limit_key = Mock(return_value="rk")
+
+    msg = MeshMessage(content="hello", channel="general", is_dm=False, sender_id="Alice")
+    await cm.send_response(msg, "reply text", command_id="keyword_foo_1")
+
+    cm.send_channel_message.assert_awaited_once()
+    args, kwargs = cm.send_channel_message.call_args
+    assert args[2] == "keyword_foo_1"
+    assert kwargs.get("scope") is None
+
+
+@pytest.mark.asyncio
+async def test_send_response_forwards_command_id_to_dm():
+    """Optional command_id is passed to send_dm for repeat tracking."""
+    bot = MagicMock()
+    bot.logger = Mock()
+    bot.config = make_config()
+    bot.connected = True
+    bot.meshcore = MagicMock()
+
+    cm = object.__new__(CommandManager)
+    cm.bot = bot
+    cm.logger = bot.logger
+    cm.send_dm = AsyncMock(return_value=True)
+    cm.get_rate_limit_key = Mock(return_value="rk")
+
+    msg = MeshMessage(content="hello", channel=None, is_dm=True, sender_id="Bob")
+    await cm.send_response(msg, "reply text", command_id="keyword_bar_2")
+
+    cm.send_dm.assert_awaited_once()
+    args, kwargs = cm.send_dm.call_args
+    assert args[2] == "keyword_bar_2"
+
+
 # ── scope normalization in send_channel_message ───────────────────────────────
 
 @pytest.mark.asyncio
@@ -324,3 +390,211 @@ async def test_send_channel_message_normalizes_bare_scope():
     calls = set_flood_scope.await_args_list
     scope_set = [c.args[0] for c in calls if c.args]
     assert "#west" in scope_set
+
+
+# ── Production #snoco scoped ping regression (2026-05-16) ─────────────────────
+
+# Captured from live TC_FLOOD channel ping on #bot: tc_code1=30332, GRP_TXT type 5.
+SNOCO_SCOPED_PING_PAYLOAD = bytes.fromhex(
+    "ca06625f8e52006332d36687f6499583e61e32753b17ade613e3a648adf8cbf7c1b03b"
+)
+SNOCO_SCOPED_PING_TC_CODE1 = 30332
+
+
+class TestSnocoScopedPingRegression:
+    """Regression for scoped ping → reply_scope #snoco → outbound send scope."""
+
+    def _load_user_style_scope_keys(self) -> dict[str, bytes]:
+        bot = MagicMock()
+        bot.logger = Mock()
+        bot.config = make_config(flood_scopes="*,wa,w-wa,sea,snoco,pnw,west")
+        cm = object.__new__(CommandManager)
+        cm.bot = bot
+        cm.logger = Mock()
+        cm.flood_scope_allow_global = False
+        return cm._load_flood_scope_keys()
+
+    def _production_rf_cache(self) -> dict:
+        return {
+            "route_type_int": 0,
+            "transport_code1": SNOCO_SCOPED_PING_TC_CODE1,
+            "payload_type_int": PAYLOAD_TYPE,
+            "scope_payload_hex": SNOCO_SCOPED_PING_PAYLOAD.hex(),
+            "raw_hex": (
+                "30dd147c76000040ca06625f8e52006332d36687f6499583e61e32753b17ade613e3a648adf8cbf7c1b03b"
+            ),
+        }
+
+    def _production_packet_info(self) -> dict:
+        return {
+            "route_type": 0,
+            "transport_codes": {"code1": SNOCO_SCOPED_PING_TC_CODE1, "code2": 0},
+            "payload_type": PAYLOAD_TYPE,
+            "payload_hex": SNOCO_SCOPED_PING_PAYLOAD.hex(),
+        }
+
+    def test_production_hmac_matches_snoco_not_w_wa(self):
+        scope_keys = self._load_user_style_scope_keys()
+        assert "#snoco" in scope_keys
+        assert MessageHandler._match_scope(
+            SNOCO_SCOPED_PING_TC_CODE1,
+            PAYLOAD_TYPE,
+            SNOCO_SCOPED_PING_PAYLOAD,
+            scope_keys,
+        ) == "#snoco"
+        assert MessageHandler._match_scope(
+            SNOCO_SCOPED_PING_TC_CODE1,
+            PAYLOAD_TYPE,
+            SNOCO_SCOPED_PING_PAYLOAD,
+            {"#w-wa": scope_keys["#w-wa"]},
+        ) is None
+
+    def test_rf_cache_resolves_reply_scope_snoco(self):
+        mh = object.__new__(MessageHandler)
+        mh.logger = Mock()
+        scope_keys = self._load_user_style_scope_keys()
+        reply_scope = mh._resolve_reply_scope_from_rf_data(
+            self._production_rf_cache(),
+            self._production_packet_info(),
+            scope_keys,
+        )
+        assert reply_scope == "#snoco"
+
+    def test_stale_flood_cache_plus_decode_still_resolves_snoco(self):
+        """Correlated RF row said FLOOD but decode says TC_FLOOD (pre-fix failure mode)."""
+        mh = object.__new__(MessageHandler)
+        mh.logger = Mock()
+        scope_keys = self._load_user_style_scope_keys()
+        stale_cache = {
+            "route_type_int": 1,
+            "transport_code1": None,
+            "payload_type_int": PAYLOAD_TYPE,
+            "scope_payload_hex": "",
+        }
+        assert (
+            mh._resolve_reply_scope_from_rf_data(
+                stale_cache,
+                self._production_packet_info(),
+                scope_keys,
+            )
+            == "#snoco"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ping_reply_send_response_forwards_snoco_scope(self):
+        """MeshMessage built after scope match must pass scope=#snoco to send_channel_message."""
+        mh = object.__new__(MessageHandler)
+        mh.logger = Mock()
+        scope_keys = self._load_user_style_scope_keys()
+        reply_scope = mh._resolve_reply_scope_from_rf_data(
+            self._production_rf_cache(),
+            self._production_packet_info(),
+            scope_keys,
+        )
+        assert reply_scope == "#snoco"
+
+        bot = MagicMock()
+        bot.logger = Mock()
+        bot.config = make_config(flood_scopes="*,wa,w-wa,sea,snoco,pnw,west")
+        bot.connected = True
+        bot.meshcore = MagicMock()
+
+        cm = object.__new__(CommandManager)
+        cm.bot = bot
+        cm.logger = bot.logger
+        cm.flood_scope_keys = scope_keys
+        cm.flood_scope_allow_global = True
+        cm.send_channel_message = AsyncMock(return_value=True)
+
+        msg = MeshMessage(
+            content="Ping",
+            channel="#bot",
+            is_dm=False,
+            sender_id="HOWL",
+            reply_scope=reply_scope,
+        )
+        await cm.send_response(msg, "Pong!")
+
+        cm.send_channel_message.assert_awaited_once()
+        _, kwargs = cm.send_channel_message.call_args
+        assert kwargs.get("scope") == "#snoco"
+
+
+class TestWildcardOnlyAllowlist:
+    """flood_scopes = "*" leaves scope_keys empty but still configures an allowlist
+    (global only). Gating on scope_keys alone let that configuration skip
+    authorisation entirely."""
+
+    @staticmethod
+    def _cmd_mgr(raw):
+        from unittest.mock import Mock
+
+        from modules.command_manager import CommandManager
+
+        mgr = object.__new__(CommandManager)
+        mgr.logger = Mock()
+        mgr._flood_scopes_config_raw = lambda: raw
+        mgr.flood_scope_allow_global = False
+        keys = mgr._load_flood_scope_keys()
+        return keys, mgr.flood_scope_allow_global
+
+    def test_wildcard_only_yields_no_keys_but_allows_global(self):
+        keys, allow_global = self._cmd_mgr("*")
+        assert keys == {}
+        assert allow_global is True
+
+    def test_wildcard_only_still_counts_as_a_configured_allowlist(self):
+        """The gate condition the handler uses must be true here, or '*' bypasses it."""
+        keys, allow_global = self._cmd_mgr("*")
+        assert bool(keys or allow_global) is True
+
+    def test_named_scope_plus_wildcard(self):
+        keys, allow_global = self._cmd_mgr("#west, *")
+        assert list(keys) == ["#west"]
+        assert allow_global is True
+
+    def test_unset_config_configures_no_allowlist(self):
+        keys, allow_global = self._cmd_mgr("")
+        assert bool(keys or allow_global) is False
+
+
+@pytest.mark.asyncio
+async def test_send_channel_message_restores_scope_when_set_raises():
+    """A raising set_flood_scope must still restore global flood.
+
+    Otherwise the device stays pinned to the region and every later send —
+    channel replies, DMs, scheduled sends — goes out under that scope.
+    """
+    bot = MagicMock()
+    bot.logger = Mock()
+    bot.config = make_config()
+    bot.connected = True
+    bot.meshcore = MagicMock()
+    bot.is_radio_zombie = False
+    bot.is_radio_offline = False
+    bot.channel_manager = MagicMock()
+    bot.channel_manager.get_channel_number = Mock(return_value=0)
+
+    cm = object.__new__(CommandManager)
+    cm.bot = bot
+    cm.logger = bot.logger
+
+    async def _set_flood_scope(value):
+        if value != "*":
+            raise RuntimeError("radio went away")
+        return MagicMock(type="OK")
+
+    set_flood_scope = AsyncMock(side_effect=_set_flood_scope)
+    send_chan_msg = AsyncMock(return_value=MagicMock(type="OK", payload={}))
+    bot.meshcore.commands.set_flood_scope = set_flood_scope
+    bot.meshcore.commands.send_chan_msg = send_chan_msg
+
+    cm._check_rate_limits = AsyncMock(return_value=(True, None))
+    cm._is_no_event_received = Mock(return_value=False)
+    cm._handle_send_result = Mock(return_value=True)
+
+    assert await cm.send_channel_message("general", "hi", scope="west") is False
+
+    scopes_set = [c.args[0] for c in set_flood_scope.await_args_list if c.args]
+    assert scopes_set == ["#west", "*"]
+    send_chan_msg.assert_not_awaited()

@@ -11,9 +11,9 @@ import socket
 import unicodedata
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Mapping, Optional, Union
 
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -58,24 +58,83 @@ def get_config_timezone(config: Any, logger: Optional[Any] = None) -> tuple[Any,
     return (tz, "UTC")
 
 
+def espn_dates_for_local_day(
+    local_tz: Any,
+    now: Optional[datetime] = None,
+) -> tuple[str, str, float, float]:
+    """Return ESPN scoreboard date range and local-day bounds for filtering events.
+
+    ESPN buckets scoreboard events by UTC calendar date. A single local calendar day
+    can span two UTC dates (e.g. 9pm PT is the next UTC day). This returns the
+    min/max YYYYMMDD strings to query, plus local midnight timestamps for filtering.
+
+    Returns:
+        (start_yyyymmdd, end_yyyymmdd, local_start_ts, local_end_ts)
+    """
+    if now is None:
+        now = datetime.now(local_tz)
+    elif now.tzinfo is None:
+        if hasattr(local_tz, 'localize'):
+            now = local_tz.localize(now)
+        else:
+            now = now.replace(tzinfo=local_tz)
+    else:
+        now = now.astimezone(local_tz)
+
+    if hasattr(local_tz, 'localize'):
+        local_start = local_tz.localize(datetime(now.year, now.month, now.day))
+    else:
+        local_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+
+    utc_dates = {
+        local_start.astimezone(timezone.utc).strftime("%Y%m%d"),
+        (local_end - timedelta(seconds=1)).astimezone(timezone.utc).strftime("%Y%m%d"),
+    }
+    return min(utc_dates), max(utc_dates), local_start.timestamp(), local_end.timestamp()
+
+
+def filter_events_local_day(
+    events: list[dict],
+    local_start_ts: float,
+    local_end_ts: float,
+    ts_key: str = "event_timestamp",
+) -> list[dict]:
+    """Keep events whose kickoff falls in [local_start, local_end); keep missing timestamps."""
+    filtered: list[dict] = []
+    for event in events:
+        ts = event.get(ts_key)
+        if ts is None or (local_start_ts <= ts < local_end_ts):
+            filtered.append(event)
+    return filtered
+
+
 def format_temperature_high_low(
     config: Any,
     high: Optional[Union[int, float]],
     low: Optional[Union[int, float]],
     units_str: str,
     logger: Optional[Any] = None,
+    translator: Any = None,
 ) -> str:
     """Format a daily high/low pair (or single value) using [Weather] templates.
 
     Config keys (optional; defaults match prior bot behavior):
-      temperature_high_low_format — both values: {high}, {low}, {units}
-      temperature_high_only_format — {high}, {units}
-      temperature_low_only_format — {low}, {units}
+      temperature_high_low_format — both values: {high}, {low}, {units}, {high_label}, {low_label}
+      temperature_high_only_format — {high}, {units}, {high_label}
+      temperature_low_only_format — {low}, {units}, {low_label}
     """
+    if translator is not None:
+        high_label = translator.translate("common.temp_high_label")
+        low_label = translator.translate("common.temp_low_label")
+    else:
+        high_label = "H"
+        low_label = "L"
+
     section = "Weather"
-    default_pair = "H:{high}{units} L:{low}{units}"
-    default_high_only = "H:{high}{units}"
-    default_low_only = "L:{low}{units}"
+    default_pair = f"{high_label}:{{high}}{{units}} {low_label}:{{low}}{{units}}"
+    default_high_only = f"{high_label}:{{high}}{{units}}"
+    default_low_only = f"{low_label}:{{low}}{{units}}"
 
     def _norm(v: Optional[Union[int, float]]) -> Optional[int]:
         if v is None:
@@ -107,22 +166,24 @@ def format_temperature_high_low(
                 logger.warning("Invalid temperature format template %r: %s", fmt, e)
             return None
 
+    labels = {"high_label": high_label, "low_label": low_label}
+
     if hi is not None and lo is not None:
-        out = _try_format(pair_fmt, high=hi, low=lo, units=units_str)
+        out = _try_format(pair_fmt, high=hi, low=lo, units=units_str, **labels)
         if out is not None:
             return out
-        return _try_format(default_pair, high=hi, low=lo, units=units_str) or f"H:{hi}{units_str} L:{lo}{units_str}"
+        return _try_format(default_pair, high=hi, low=lo, units=units_str, **labels) or f"{high_label}:{hi}{units_str} {low_label}:{lo}{units_str}"
 
     if hi is not None:
-        out = _try_format(high_only_fmt, high=hi, low=lo, units=units_str)
+        out = _try_format(high_only_fmt, high=hi, low=lo, units=units_str, **labels)
         if out is not None:
             return out
-        return _try_format(default_high_only, high=hi, low=lo, units=units_str) or f"H:{hi}{units_str}"
+        return _try_format(default_high_only, high=hi, low=lo, units=units_str, **labels) or f"{high_label}:{hi}{units_str}"
 
-    out = _try_format(low_only_fmt, high=hi, low=lo, units=units_str)
+    out = _try_format(low_only_fmt, high=hi, low=lo, units=units_str, **labels)
     if out is not None:
         return out
-    return _try_format(default_low_only, high=hi, low=lo, units=units_str) or f"L:{lo}{units_str}"
+    return _try_format(default_low_only, high=hi, low=lo, units=units_str, **labels) or f"{low_label}:{lo}{units_str}"
 
 
 def abbreviate_location(location: str, max_length: int = 20) -> str:
@@ -544,6 +605,25 @@ def calculate_packet_hash(raw_hex: str, payload_type: Optional[int] = None) -> s
         return "0000000000000000"
 
 
+def get_packet_hash_placeholder(message: Any) -> str:
+    """Return the correlated MeshCore packet hash for template placeholders.
+
+    Reads only ``message.routing_info["packet_hash"]`` so an uncorrelated RF
+    cache entry cannot leak another packet's identity. Missing, empty, and the
+    error sentinel ``0000000000000000`` return ``""`` so the placeholder renders
+    empty (and piped templates can hide a label with ``prefix_if_nonempty``).
+    """
+    if message is None:
+        return ""
+    routing_info = getattr(message, "routing_info", None)
+    if not isinstance(routing_info, dict):
+        return ""
+    packet_hash = routing_info.get("packet_hash")
+    if not packet_hash or packet_hash == "0000000000000000":
+        return ""
+    return str(packet_hash)
+
+
 def verify_meshcore_advert_ed25519(mesh_payload: bytes) -> bool:
     """Verify MeshCore ADVERT Ed25519 signature (layout from ``Mesh::createAdvert``).
 
@@ -813,12 +893,14 @@ def get_nominatim_geocoder(user_agent: str = "meshcore-bot", timeout: int = 10) 
     return Nominatim(user_agent=user_agent, timeout=timeout)
 
 
-async def rate_limited_nominatim_geocode(bot: Any, query: str, timeout: int = 10) -> Optional[Any]:
+async def rate_limited_nominatim_geocode(
+    bot: Any, query: Union[str, Mapping[str, str]], timeout: int = 10
+) -> Optional[Any]:
     """Perform rate-limited Nominatim geocoding (forward geocoding).
 
     Args:
         bot: Bot instance (must have nominatim_rate_limiter attribute).
-        query: Location query string.
+        query: Location query string or structured Nominatim dict (e.g. postalcode).
         timeout: Request timeout in seconds.
 
     Returns:
@@ -827,19 +909,13 @@ async def rate_limited_nominatim_geocode(bot: Any, query: str, timeout: int = 10
     if not hasattr(bot, 'nominatim_rate_limiter'):
         # Fallback if rate limiter not initialized
         geolocator = get_nominatim_geocoder(timeout=timeout)
-        return geolocator.geocode(query, timeout=timeout)
+        return await asyncio.to_thread(geolocator.geocode, query, timeout=timeout)
 
-    # Wait for rate limiter
-    await bot.nominatim_rate_limiter.wait_for_request()
+    # Atomically reserve a slot shared with synchronous worker-thread callers.
+    await bot.nominatim_rate_limiter.wait_and_request()
 
-    # Make the request
     geolocator = get_nominatim_geocoder(timeout=timeout)
-    result = geolocator.geocode(query, timeout=timeout)
-
-    # Record the request
-    bot.nominatim_rate_limiter.record_request()
-
-    return result
+    return await asyncio.to_thread(geolocator.geocode, query, timeout=timeout)
 
 
 async def rate_limited_nominatim_reverse(bot: Any, coordinates: str, timeout: int = 10) -> Optional[Any]:
@@ -856,27 +932,23 @@ async def rate_limited_nominatim_reverse(bot: Any, coordinates: str, timeout: in
     if not hasattr(bot, 'nominatim_rate_limiter'):
         # Fallback if rate limiter not initialized
         geolocator = get_nominatim_geocoder(timeout=timeout)
-        return geolocator.reverse(coordinates, timeout=timeout)
+        return await asyncio.to_thread(geolocator.reverse, coordinates, timeout=timeout)
 
-    # Wait for rate limiter
-    await bot.nominatim_rate_limiter.wait_for_request()
+    # Atomically reserve a slot shared with synchronous worker-thread callers.
+    await bot.nominatim_rate_limiter.wait_and_request()
 
-    # Make the request
     geolocator = get_nominatim_geocoder(timeout=timeout)
-    result = geolocator.reverse(coordinates, timeout=timeout)
-
-    # Record the request
-    bot.nominatim_rate_limiter.record_request()
-
-    return result
+    return await asyncio.to_thread(geolocator.reverse, coordinates, timeout=timeout)
 
 
-def rate_limited_nominatim_geocode_sync(bot: Any, query: str, timeout: int = 10) -> Optional[Any]:
+def rate_limited_nominatim_geocode_sync(
+    bot: Any, query: Union[str, Mapping[str, str]], timeout: int = 10
+) -> Optional[Any]:
     """Perform rate-limited Nominatim geocoding (synchronous version).
 
     Args:
         bot: Bot instance (must have nominatim_rate_limiter attribute).
-        query: Location query string.
+        query: Location query string or structured Nominatim dict (e.g. postalcode).
         timeout: Request timeout in seconds.
 
     Returns:
@@ -887,17 +959,11 @@ def rate_limited_nominatim_geocode_sync(bot: Any, query: str, timeout: int = 10)
         geolocator = get_nominatim_geocoder(timeout=timeout)
         return geolocator.geocode(query, timeout=timeout)
 
-    # Wait for rate limiter
-    bot.nominatim_rate_limiter.wait_for_request_sync()
+    # Reserve the slot before the request, not after: this runs on worker threads.
+    bot.nominatim_rate_limiter.wait_and_request_sync()
 
-    # Make the request
     geolocator = get_nominatim_geocoder(timeout=timeout)
-    result = geolocator.geocode(query, timeout=timeout)
-
-    # Record the request
-    bot.nominatim_rate_limiter.record_request()
-
-    return result
+    return geolocator.geocode(query, timeout=timeout)
 
 
 def rate_limited_nominatim_reverse_sync(bot: Any, coordinates: str, timeout: int = 10) -> Optional[Any]:
@@ -916,17 +982,11 @@ def rate_limited_nominatim_reverse_sync(bot: Any, coordinates: str, timeout: int
         geolocator = get_nominatim_geocoder(timeout=timeout)
         return geolocator.reverse(coordinates, timeout=timeout)
 
-    # Wait for rate limiter
-    bot.nominatim_rate_limiter.wait_for_request_sync()
+    # Reserve the slot before the request, not after: this runs on worker threads.
+    bot.nominatim_rate_limiter.wait_and_request_sync()
 
-    # Make the request
     geolocator = get_nominatim_geocoder(timeout=timeout)
-    result = geolocator.reverse(coordinates, timeout=timeout)
-
-    # Record the request
-    bot.nominatim_rate_limiter.record_request()
-
-    return result
+    return geolocator.reverse(coordinates, timeout=timeout)
 
 
 async def geocode_zipcode(bot: Any, zipcode: str, default_country: Optional[str] = None, timeout: int = 10) -> tuple[Optional[float], Optional[float]]:
@@ -1803,6 +1863,13 @@ async def check_internet_connectivity_async(host: str = "8.8.8.8", port: int = 5
         return False
 
 
+def public_key_has_prefix(public_key: str, prefix: str) -> bool:
+    """Return True if public_key starts with prefix (case-insensitive hex match)."""
+    if not public_key or not prefix:
+        return False
+    return public_key.lower().startswith(prefix.lower())
+
+
 def parse_path_string(path_str: str, prefix_hex_chars: int = 2) -> list[str]:
     """Parse a path string to extract node IDs.
 
@@ -1874,6 +1941,94 @@ def extract_path_node_ids_from_message(message: Any) -> list[str]:
         ):
             return [p.upper() for p in parts]
     return []
+
+
+def _normalized_message_path_string(message: Any) -> str:
+    """Strip route suffix and hop-count suffix from message.path for continuous-hex parsing."""
+    path_string = (getattr(message, 'path', None) or '').strip()
+    if not path_string or 'Direct' in path_string or '0 hops' in path_string:
+        return ''
+    if ' via ROUTE_TYPE_' in path_string:
+        path_string = path_string.split(' via ROUTE_TYPE_')[0]
+    path_string = re.sub(r'\s*\([^)]*hops?[^)]*\)', '', path_string, flags=re.IGNORECASE).strip()
+    return path_string
+
+
+def bytes_per_hop_from_routing_and_nodes(
+    routing_info: Optional[dict[str, Any]],
+    node_ids: list[str],
+) -> int:
+    """Bytes per hop from packet routing metadata, else inferred from hex node width.
+
+    When the packet carries a path and ``routing_info`` includes ``bytes_per_hop``
+    in 1..3, that value wins. Otherwise uses minimum half-byte width among
+    ``node_ids`` (comma or path_nodes). Returns ``1`` when no nodes (direct /
+    unknown).
+
+    A hopless packet always reports ``1``, whatever ``bytes_per_hop`` says.
+    ``bytes_per_hop`` describes how a path is *encoded*, and a direct packet has no
+    path for it to describe, so letting the format field through would make
+    ``pathbytes_min:2`` treat "Direct" as a multi-byte path and print a label for a
+    distance that does not exist.
+    """
+    path_length = (routing_info or {}).get('path_length')
+    if not node_ids and not path_length:
+        return 1
+    if routing_info:
+        bph = routing_info.get('bytes_per_hop')
+        if isinstance(bph, int) and 1 <= bph <= 3:
+            return bph
+    if node_ids:
+        return min(len(n) // 2 for n in node_ids)
+    return 1
+
+
+def message_hop_count(message: Any) -> Optional[int]:
+    """Hop count for the message, or ``None`` when it cannot be determined.
+
+    Prefers ``message.hops``, then ``routing_info`` (``path_length``, else the
+    number of ``path_nodes``), then a count parsed from the path display string
+    (``"01,5f (2 hops)"``; ``"Direct"`` or ``"0 hops"`` mean zero).
+
+    ``None`` means unknown, which is not the same as zero: callers that gate on
+    hop count should treat it as "cannot confirm" rather than "direct".
+    """
+    hops_val = getattr(message, 'hops', None)
+    routing_info = getattr(message, 'routing_info', None)
+
+    if not isinstance(hops_val, int) and isinstance(routing_info, dict):
+        hops_val = routing_info.get('path_length')
+        if hops_val is None and routing_info.get('path_nodes'):
+            hops_val = len(routing_info['path_nodes'])
+
+    if not isinstance(hops_val, int):
+        path_str = getattr(message, 'path', None) or ""
+        hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
+        if hop_match:
+            hops_val = int(hop_match.group(1))
+        elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
+            hops_val = 0
+
+    return hops_val if isinstance(hops_val, int) else None
+
+
+def message_path_bytes_per_hop(message: Any, *, prefix_hex_chars: int = 2) -> int:
+    """Best-effort bytes per hop for the message path (RF metadata or inferred from path text).
+
+    Uses ``routing_info.bytes_per_hop`` when present (1..3). Otherwise prefers
+    :func:`extract_path_node_ids_from_message`, then comma/continuous hex via
+    :func:`node_ids_from_path_string` using ``prefix_hex_chars`` for legacy paths.
+
+    Returns ``1`` when there is no usable path (direct / unparseable) so conservative
+    gates (e.g. ``pathbytes_min:2``) treat neither unknown nor hopless as multibyte.
+    """
+    routing_info = getattr(message, 'routing_info', None)
+    node_ids = extract_path_node_ids_from_message(message)
+    if not node_ids:
+        ps = _normalized_message_path_string(message)
+        if ps:
+            node_ids = node_ids_from_path_string(ps, prefix_hex_chars)
+    return bytes_per_hop_from_routing_and_nodes(routing_info, node_ids)
 
 
 def node_ids_from_path_string(path_str: str, prefix_hex_chars: int = 2) -> list[str]:
@@ -2298,6 +2453,8 @@ def format_elapsed_display(ts: Any, translator: Any = None) -> str:
     elapsed_ms = (datetime.now(UTC).timestamp() - ts_f) * 1000
     if elapsed_ms < 0 or elapsed_ms > _ELAPSED_MS_MAX:
         return _sync_str()
+    if elapsed_ms >= 1000:
+        return f"{round(elapsed_ms / 1000, 1)}s"
     return f"{round(elapsed_ms)}ms"
 
 
@@ -2366,27 +2523,18 @@ def format_keyword_response_with_placeholders(
                 time_str = "Unknown"
 
             replacements['timestamp'] = time_str
+            replacements['packet_hash'] = get_packet_hash_placeholder(message)
 
-            # Total hops: use message.hops when set, else parse from path string (e.g. "01,5f (2 hops)")
-            hops_val = getattr(message, 'hops', None)
-            if hops_val is not None and isinstance(hops_val, int):
-                replacements['hops'] = str(hops_val)
-            else:
-                path_str = message.path or ""
-                hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
-                if hop_match:
-                    replacements['hops'] = hop_match.group(1)
-                elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
-                    replacements['hops'] = "0"
-                else:
-                    replacements['hops'] = "?"
-            # Pluralized label: "1 hop", "2 hops", or "?" when unknown
-            h = replacements['hops']
-            if h == "?":
+            # Shared with BaseCommand.get_hops_display_values and the hops_min filter, so
+            # a keyword response and a command response report the same hop count for the
+            # same packet. "?" only when the count cannot be determined at all.
+            hops_val = message_hop_count(message)
+            if hops_val is None:
+                replacements['hops'] = "?"
                 replacements['hops_label'] = "?"
             else:
-                n = int(h)
-                replacements['hops_label'] = "1 hop" if n == 1 else f"{n} hops"
+                replacements['hops'] = str(hops_val)
+                replacements['hops_label'] = "1 hop" if hops_val == 1 else f"{hops_val} hops"
         else:
             # No message - use defaults for message-based placeholders
             replacements['sender'] = "Unknown"
@@ -2398,6 +2546,7 @@ def format_keyword_response_with_placeholders(
             replacements['path_distance'] = ""
             replacements['firstlast_distance'] = ""
             replacements['timestamp'] = "Unknown"
+            replacements['packet_hash'] = ""
             replacements['hops'] = "?"
             replacements['hops_label'] = "?"
 

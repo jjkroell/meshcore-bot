@@ -2,6 +2,7 @@
 """
 Fire Command - BC Wildfire active fire status via BCWS ArcGIS API
 """
+import asyncio
 import urllib.request
 import urllib.parse
 import json
@@ -120,7 +121,7 @@ class FireCommand(BaseCommand):
                     "fire <region>\nfire <region> major\nRegions: cstl, car, ok, koot, pg, nw")
                 return True
 
-            fires = self._fetch(centre_id, ooc_only=ooc_only)
+            fires = await asyncio.to_thread(self._fetch, centre_id, ooc_only=ooc_only)  # off the event loop
 
             if not fires:
                 label = 'Out of Control ' if ooc_only else ''

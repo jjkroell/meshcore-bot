@@ -1,81 +1,135 @@
-"""Cron keys for [Scheduled_Messages]: a 5-field crontab or an @preset.
+#!/usr/bin/env python3
+"""
+Parse ``[Scheduled_Messages]`` option keys into APScheduler CronTrigger instances,
+and option values into ``(channel, message, scope)`` for optional regional flood scope.
 
-    0 9 1 * *  = #kod-bot:Monthly test      (09:00 on the 1st of every month)
-    0 8 * * mon = #ve7kod:Weekly net        (08:00 every Monday)
-    @monthly   = #ve7kod:First of the month (00:00 on the 1st)
+Supports (schedule keys):
+- Standard 5-field crontab: minute hour day-of-month month day-of-week
+- Preset aliases: @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly
+- Deprecated legacy HHMM (24-hour, no colon) for daily firing at that clock time
 
-Shared by the scheduler and the web viewer. Day-of-week numbers are
-APScheduler's (0=Monday ... 6=Sunday), not crontab's; names (mon-sun) are safer.
+Day-of-week uses APScheduler numbering (0=Monday … 6=Sunday), not Vixie cron
+(0=Sunday; 7 often allowed). Prefer mon–sun names. ``@weekly`` expands to
+``0 0 * * 0`` (Monday 00:00). See docs/configuration.md and config.ini.example.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Optional
+
 from apscheduler.triggers.cron import CronTrigger
 
-# APScheduler's from_crontab doesn't take @presets.
-CRON_PRESETS = {
-    '@yearly': '0 0 1 1 *',
-    '@annually': '0 0 1 1 *',
-    '@monthly': '0 0 1 * *',
-    '@weekly': '0 0 * * sun',
-    '@daily': '0 0 * * *',
-    '@midnight': '0 0 * * *',
-    '@hourly': '0 * * * *',
+
+def parse_scheduled_message_value(raw: str) -> tuple[str, str, str | None]:
+    """Parse a ``[Scheduled_Messages]`` option value into ``(channel, message, scope)``.
+
+    **Legacy (unscoped):** ``channel:body`` — split on the first ``:`` only; ``scope`` is
+    ``None`` (global flood).
+
+    **Scoped:** ``channel:#region:body`` — exactly three segments from ``split(':', 2)``
+    where the middle segment starts with ``#`` after strip. The message body may contain
+    further colons. Scope must not contain ``:``.
+
+    Args:
+        raw: Config value, e.g. ``Public:Hello`` or ``Public:#sea:Hello: more``.
+
+    Returns:
+        ``(channel, message, scope)`` with ``scope`` set only for the scoped form.
+
+    Raises:
+        ValueError: If there is no ``:`` (cannot separate channel from body).
+    """
+    s = (raw or "").strip()
+    if ":" not in s:
+        raise ValueError("scheduled message value must be channel:message")
+    parts = s.split(":", 2)
+    if len(parts) == 3 and parts[1].strip().startswith("#"):
+        channel = parts[0].strip()
+        scope = parts[1].strip()
+        message = parts[2].strip()
+        return channel, message, scope
+    channel, message = s.split(":", 1)
+    return channel.strip(), message.strip(), None
+
+# Maps @preset (lowercase) -> 5-field crontab (APScheduler does not accept @syntax in from_crontab).
+_SPECIAL_PRESET_TO_CRON: dict[str, str] = {
+    "@yearly": "0 0 1 1 *",
+    "@annually": "0 0 1 1 *",
+    "@monthly": "0 0 1 * *",
+    "@weekly": "0 0 * * 0",
+    "@daily": "0 0 * * *",
+    "@midnight": "0 0 * * *",
+    "@hourly": "0 * * * *",
 }
 
-_DAYS = {'mon': 'Mon', 'tue': 'Tue', 'wed': 'Wed', 'thu': 'Thu', 'fri': 'Fri', 'sat': 'Sat', 'sun': 'Sun',
-         '0': 'Mon', '1': 'Tue', '2': 'Wed', '3': 'Thu', '4': 'Fri', '5': 'Sat', '6': 'Sun'}
-_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+@dataclass(frozen=True)
+class ScheduleParseResult:
+    """Outcome of parsing a scheduled message key."""
+
+    trigger: Optional[CronTrigger]
+    """APScheduler trigger, or None if the expression is invalid."""
+
+    display_label: str
+    """Human-readable schedule for logs and the ``schedule`` command."""
+
+    is_deprecated_hhmm: bool
+    """True when the legacy HHMM daily form was used."""
 
 
-def normalize_cron_key(key: str) -> str:
-    """Lowercase with single spaces, as keys are stored."""
-    return ' '.join(key.lower().split())
-
-
-def cron_spec(key: str) -> str | None:
-    """The crontab string for a cron key, or None if the key isn't a valid one."""
-    key = normalize_cron_key(key)
-    spec = CRON_PRESETS.get(key, key)
-    if len(spec.split()) != 5:
-        return None
+def is_valid_legacy_hhmm(time_str: str) -> bool:
+    """Return True if ``time_str`` is a valid legacy HHMM clock time (24h)."""
     try:
-        CronTrigger.from_crontab(spec)
+        if len(time_str) != 4 or not time_str.isdigit():
+            return False
+        hour = int(time_str[:2])
+        minute = int(time_str[2:])
+        return 0 <= hour <= 23 and 0 <= minute <= 59
     except ValueError:
-        return None
-    return spec
+        return False
 
 
-def cron_trigger(key: str, tz=None) -> CronTrigger:
-    spec = cron_spec(key)
-    if spec is None:
-        raise ValueError(f"invalid cron key {key!r}")
-    return CronTrigger.from_crontab(spec, timezone=tz)
+def parse_schedule_key(
+    schedule_key: str,
+    timezone,
+) -> ScheduleParseResult:
+    """Parse a ``[Scheduled_Messages]`` option name into a :class:`CronTrigger`.
 
+    Args:
+        schedule_key: Raw config option key (e.g. ``0 9 * * *``, ``@daily``, ``0900``).
+        timezone: ``tzinfo`` or string accepted by APScheduler (same as scheduler).
 
-def _ordinal(n: int) -> str:
-    suffix = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-    return f"{n}{suffix}"
+    Returns:
+        ScheduleParseResult with ``trigger`` set when valid, else ``trigger`` is None
+        and ``display_label`` still describes what was attempted.
+    """
+    raw = (schedule_key or "").strip()
+    if not raw:
+        return ScheduleParseResult(None, "", False)
 
+    lowered = raw.lower()
 
-def describe_cron(key: str) -> str:
-    """A short label for the common shapes ("Monthly on the 1st at 09:00");
-    anything else is shown as the crontab itself."""
-    spec = cron_spec(key)
-    if spec is None:
-        return key
-    minute, hour, dom, month, dow = spec.split()
-    if not (minute.isdigit() and hour.isdigit()):
-        return spec
-    at = f"{int(hour):02d}:{int(minute):02d}"
-    if dom == '*' and month == '*' and dow == '*':
-        return f"Daily at {at}"
-    if dom == '*' and month == '*' and dow in _DAYS:
-        return f"Every {_DAYS[dow]} at {at}"
-    if dom.isdigit() and month == '*' and dow == '*':
-        return f"Monthly on the {_ordinal(int(dom))} at {at}"
-    if dom.isdigit() and month.isdigit() and 1 <= int(month) <= 12 and dow == '*':
-        return f"Yearly on {_MONTHS[int(month) - 1]} {int(dom)} at {at}"
-    if dom == 'last' and month == '*' and dow == '*':
-        return f"Monthly on the last day at {at}"
-    return spec
+    # 1) Deprecated legacy HHMM (must be checked before numeric cron fragments).
+    if is_valid_legacy_hhmm(raw):
+        hour = int(raw[:2])
+        minute = int(raw[2:])
+        trigger = CronTrigger(hour=hour, minute=minute, timezone=timezone)
+        display = f"{hour:02d}:{minute:02d}"
+        return ScheduleParseResult(trigger, display, True)
+
+    # 2) @preset aliases
+    if lowered in _SPECIAL_PRESET_TO_CRON:
+        cron_expr = _SPECIAL_PRESET_TO_CRON[lowered]
+        try:
+            trigger = CronTrigger.from_crontab(cron_expr, timezone=timezone)
+        except ValueError:
+            return ScheduleParseResult(None, raw, False)
+        return ScheduleParseResult(trigger, raw, False)
+
+    # 3) Standard 5-field crontab
+    try:
+        trigger = CronTrigger.from_crontab(raw, timezone=timezone)
+    except ValueError:
+        return ScheduleParseResult(None, raw, False)
+    return ScheduleParseResult(trigger, raw, False)

@@ -31,16 +31,44 @@ class ChannelManager:
         self._channels_cache: dict[int, dict[str, Any]] = {}
         self._cache_valid = False
         self._fetch_timeout = 2.0  # Timeout for individual channel fetches
-
-    async def fetch_channels(self):
-        """Fetch channels from the MeshCore node using enhanced concurrent fetching"""
-        self.logger.info("Fetching channels from MeshCore node using enhanced concurrent method...")
+        # Delay between per-channel reads during the connect-time scan, keeping
+        # the init burst gentle on the firmware. Commands are already serialized
+        # globally; this adds extra spacing for the 40-slot scan specifically.
         try:
-            # Wait a moment for the device to be ready
-            await asyncio.sleep(2)
+            self._fetch_interval = max(
+                0.0,
+                bot.config.getfloat(
+                    'Connection', 'channel_fetch_interval_ms', fallback=300.0
+                ) / 1000.0,
+            )
+        except Exception:
+            self._fetch_interval = 0.3
 
-            # Fetch all channels concurrently
-            channels = await self.fetch_all_channels(force_refresh=True)
+    @staticmethod
+    def _normalize_channel_name_for_lookup(name: str) -> str:
+        """Lowercase channel name without a leading # for cache lookups."""
+        return name.removeprefix("#").lower()
+
+    async def fetch_channels(self, max_attempts: int = 3, retry_delay: float = 2.0) -> bool:
+        """Fetch configured channels, retrying when the node returns no usable data."""
+        self.logger.info("Fetching channels from MeshCore node using enhanced concurrent method...")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+
+        # Give the companion protocol a moment to settle after transport connect.
+        await asyncio.sleep(2)
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                channels = await self.fetch_all_channels(force_refresh=True)
+            except Exception as e:
+                channels = []
+                self.logger.warning(
+                    "Channel fetch attempt %d/%d failed: %s",
+                    attempt,
+                    max_attempts,
+                    e,
+                )
 
             if channels:
                 self.logger.info(f"Successfully fetched {len(channels)} channels from MeshCore node")
@@ -51,13 +79,25 @@ class ChannelManager:
                         self.logger.info(f"  Channel {channel_idx}: {channel_name}")
                     else:
                         self.logger.debug(f"  Channel {channel_idx}: (empty)")
-            else:
-                self.logger.warning("No channels found on MeshCore node")
-                self.bot.meshcore.channels = {}
+                return True
 
-        except Exception as e:
-            self.logger.error(f"Failed to fetch channels: {e}")
+            self._cache_valid = False
             self.bot.meshcore.channels = {}
+            if attempt < max_attempts:
+                self.logger.warning(
+                    "No channels received from MeshCore node on attempt %d/%d; "
+                    "retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+
+        self.logger.error(
+            "No channels received from MeshCore node after %d attempt(s)",
+            max_attempts,
+        )
+        return False
 
     async def fetch_all_channels(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         """
@@ -108,7 +148,8 @@ class ChannelManager:
                         break
 
                 # Conservative delay to avoid overwhelming the device
-                await asyncio.sleep(0.3)
+                if self._fetch_interval > 0:
+                    await asyncio.sleep(self._fetch_interval)
 
             except Exception as e:
                 consecutive_empty += 1
@@ -118,14 +159,15 @@ class ChannelManager:
                     break
                 continue
 
-        self._cache_valid = True
+        self._cache_valid = bool(valid_channels)
         self.logger.info(f"Successfully fetched {len(valid_channels)} channels")
 
         # Update the bot's meshcore channels for compatibility
         self.bot.meshcore.channels = self._channels_cache
 
-        # Store channels in database for web viewer access
-        self._store_channels_in_db(valid_channels)
+        # Do not erase the last known channel table on a transient all-empty scan.
+        if valid_channels:
+            self._store_channels_in_db(valid_channels)
 
         return valid_channels
 
@@ -310,12 +352,13 @@ class ChannelManager:
         """
         # Exact match first so that e.g. "vanisle" and "#vanisle" resolve independently
         for num, channel_info in self._channels_cache.items():
-            if channel_info.get('channel_name', '') == channel_name:
+            if channel_info.get("channel_name", "") == channel_name:
                 return num
-        # Fall back to case-insensitive stripped match for convenience (#channel == channel)
-        name_lower = channel_name.lstrip('#').lower()
+        # Fall back to case-insensitive, #-less match for convenience (#channel == channel)
+        name_key = self._normalize_channel_name_for_lookup(channel_name)
         for num, channel_info in self._channels_cache.items():
-            if channel_info.get('channel_name', '').lstrip('#').lower() == name_lower:
+            cached_name = channel_info.get("channel_name", "")
+            if self._normalize_channel_name_for_lookup(cached_name) == name_key:
                 return num
 
         self.logger.warning(f"Channel name '{channel_name}' not found in cached channels")
@@ -353,9 +396,10 @@ class ChannelManager:
             self.logger.warning("Cache not valid, call fetch_all_channels() first")
             return None
 
-        name_lower = name.lower()
+        name_key = self._normalize_channel_name_for_lookup(name)
         for channel in self._channels_cache.values():
-            if channel.get("channel_name", "").lower() == name_lower:
+            cached_name = channel.get("channel_name", "")
+            if self._normalize_channel_name_for_lookup(cached_name) == name_key:
                 return channel
 
         return None

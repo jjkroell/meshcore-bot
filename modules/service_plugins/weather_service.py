@@ -5,20 +5,42 @@ Provides scheduled weather forecasts and alert monitoring
 """
 
 import asyncio
+import contextlib
 import json
 import math
 import re
+import threading
 import time
 import xml.dom.minidom
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import ephem
 import requests
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+from .. import alert_format
+from ..commands.rain_command import (
+    analyze_precip_nowcast,
+    decide_rain_notification,
+    episode_probability_temp,
+    fetch_precip_series,
+    fetch_precip_series_nws,
+    format_amount_estimate,
+    join_location,
+    nws_http_means_no_coverage,
+    precip_descriptor,
+    reverse_geocode_region,
+)
+from ..url_shortener import shorten_url_sync
+from ..utils import format_temperature_high_low, get_config_timezone
+from .base_service import BaseServicePlugin
 
 # Try to import MQTT client (use paho-mqtt like packet capture service)
 try:
@@ -28,11 +50,19 @@ except ImportError:
     MQTT_AVAILABLE = False
     mqtt = None
 
-import contextlib
 
-from ..url_shortener import shorten_url
-from ..utils import format_temperature_high_low, get_config_timezone
-from .base_service import BaseServicePlugin
+FORECAST_MISFIRE_GRACE_SECONDS = 300
+FORECAST_RETRY_OFFSETS_SECONDS = (300, 900, 1800)
+FORECAST_RETRY_JOB_ID = "weather_daily_forecast_retry"
+TRANSIENT_FORECAST_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+@dataclass(frozen=True)
+class ForecastFetchResult:
+    """Forecast text plus whether a later attempt could reasonably succeed."""
+
+    text: str
+    retryable: bool = False
 
 
 class WeatherService(BaseServicePlugin):
@@ -44,6 +74,36 @@ class WeatherService(BaseServicePlugin):
 
     config_section = 'Weather_Service'
     description = "Scheduled weather forecasts and alert monitoring"
+
+    # Web-viewer settings schema (see modules/settings_schema.py)
+    settings_schema = [
+        {"key": "weather_alarm", "label": "Daily forecast time", "type": "str", "default": "6:00",
+         "help": "HH:MM (24h), or 'sunrise'/'sunset'."},
+        {"key": "weather_channel", "label": "Forecast channel", "type": "str", "default": "#weather",
+         "help": "Channel for daily forecasts."},
+        {"key": "alerts_channel", "label": "Alerts channel", "type": "str", "default": "#weather",
+         "help": "Channel for weather alerts."},
+        {"key": "my_position_lat", "label": "Latitude", "type": "float", "min": -90, "max": 90, "default": "",
+         "help": "Bot latitude (decimal degrees) for forecasts/alerts."},
+        {"key": "my_position_lon", "label": "Longitude", "type": "float", "min": -180, "max": 180, "default": "",
+         "help": "Bot longitude (decimal degrees)."},
+        {"key": "poll_weather_alerts_interval", "label": "Alert poll interval", "type": "int",
+         "min": 1000, "default": 600000, "unit": "ms", "help": "How often to check for new alerts."},
+        {"key": "rain_nowcast_enabled", "label": "Rain nowcast", "type": "bool", "default": False,
+         "help": "Push a heads-up when rain is about to start at the bot's position."},
+        {"key": "rain_channel", "label": "Rain nowcast channel", "type": "str", "default": "",
+         "help": "Channel for rain heads-ups. Defaults to the forecast channel."},
+        {"key": "poll_rain_nowcast_interval", "label": "Rain poll interval", "type": "int",
+         "min": 1000, "default": 900000, "unit": "ms", "help": "How often to check for incoming rain."},
+        {"key": "rain_nowcast_lead_minutes", "label": "Rain lead time", "type": "int", "min": 1, "default": 60, "unit": "min",
+         "help": "Only announce rain starting within this many minutes."},
+        {"key": "rain_nowcast_renotify_minutes", "label": "Rain renotify", "type": "int", "min": 1, "default": 30, "unit": "min",
+         "help": "Minimum minutes between rain pushes."},
+        {"key": "blitz_collection_interval", "label": "Storm collection interval", "type": "int",
+         "min": 1000, "default": 600000, "unit": "ms", "help": "How often thunder/storm data is aggregated."},
+        {"key": "flood_scope", "label": "Flood scope", "type": "str", "default": "",
+         "help": "Optional regional TC_FLOOD scope for mesh posts (e.g. #west)."},
+    ]
 
     def __init__(self, bot: Any):
         """Initialize weather service.
@@ -83,11 +143,44 @@ class WeatherService(BaseServicePlugin):
 
         # Create retry-enabled session for API calls
         self.api_session = self._create_retry_session()
+        # requests.Session mutates shared cookie/adapter state and is not safe to
+        # use concurrently. Keep all of this service's threaded session work
+        # serialized without making the event loop wait on a threading lock.
+        self._api_session_lock = threading.Lock()
 
-        # Get temperature/wind units from config (for Open-Meteo)
-        self.temperature_unit = self.bot.config.get('Weather', 'temperature_unit', fallback='fahrenheit')
-        self.wind_speed_unit = self.bot.config.get('Weather', 'wind_speed_unit', fallback='mph')
-        self.precipitation_unit = self.bot.config.get('Weather', 'precipitation_unit', fallback='inch')
+        # Get temperature/wind units from config (for Open-Meteo). Normalized and
+        # validated the same way GlobalWxCommand does, so the unit also works as
+        # a translation key for its display label.
+        self.temperature_unit = self.bot.config.get('Weather', 'temperature_unit', fallback='fahrenheit').lower()
+        self.wind_speed_unit = self.bot.config.get('Weather', 'wind_speed_unit', fallback='mph').lower()
+        self.precipitation_unit = self.bot.config.get('Weather', 'precipitation_unit', fallback='inch').lower()
+        if self.temperature_unit not in ('fahrenheit', 'celsius'):
+            self.logger.warning(f"Invalid temperature_unit '{self.temperature_unit}', using 'fahrenheit'")
+            self.temperature_unit = 'fahrenheit'
+        if self.wind_speed_unit not in ('mph', 'kmh', 'ms', 'kn'):
+            self.logger.warning(f"Invalid wind_speed_unit '{self.wind_speed_unit}', using 'mph'")
+            self.wind_speed_unit = 'mph'
+        if self.precipitation_unit not in ('inch', 'mm'):
+            self.logger.warning(f"Invalid precipitation_unit '{self.precipitation_unit}', using 'inch'")
+            self.precipitation_unit = 'inch'
+
+        # Proactive rain nowcast ("rain incoming" push). Reuses the rain command's
+        # Open-Meteo 15-minutely logic for the bot's own position.
+        self.rain_nowcast_enabled = self.bot.config.getboolean('Weather_Service', 'rain_nowcast_enabled', fallback=False)
+        self.rain_channel = self.bot.config.get('Weather_Service', 'rain_channel', fallback=self.weather_channel)
+        self.poll_rain_nowcast_interval = self.bot.config.getint('Weather_Service', 'poll_rain_nowcast_interval', fallback=900000) / 1000.0
+        self.rain_nowcast_lead_minutes = self.bot.config.getint('Weather_Service', 'rain_nowcast_lead_minutes', fallback=60)
+        self.rain_nowcast_renotify_minutes = self.bot.config.getint('Weather_Service', 'rain_nowcast_renotify_minutes', fallback=30)
+        self.rain_nowcast_threshold_mm = self.bot.config.getfloat('Weather_Service', 'rain_nowcast_threshold_mm', fallback=0.1)
+        # Also announce when rain is about to stop (not just start).
+        self.rain_nowcast_announce_ending = self.bot.config.getboolean('Weather_Service', 'rain_nowcast_announce_ending', fallback=True)
+        # Optional precip-amount estimate in the heads-up, e.g. "(est 0.2 in)".
+        self.rain_nowcast_show_amount = self.bot.config.getboolean('Weather_Service', 'rain_nowcast_show_amount', fallback=True)
+        self.rain_nowcast_amount_unit = self.bot.config.get('Weather_Service', 'rain_nowcast_amount_unit', fallback='in').strip().lower()
+        # Only push an "incoming" alert when precip is at least this likely (%), to
+        # cut false alarms; reuse a fetched series for this many seconds.
+        self.rain_nowcast_min_probability = self.bot.config.getint('Weather_Service', 'rain_nowcast_min_probability', fallback=50)
+        self.rain_nowcast_cache_seconds = self.bot.config.getint('Weather_Service', 'rain_nowcast_cache_seconds', fallback=300)
 
         # Track seen alerts to avoid duplicates
         self.seen_alert_ids: set[str] = set()
@@ -95,12 +188,29 @@ class WeatherService(BaseServicePlugin):
         # Track last alert check time to only send new alerts
         self.last_alert_check_time: Optional[float] = None
 
+        # Lazy: None = unknown, False = NOAA alerts unavailable (non-US / no coverage)
+        self._nws_alerts_available: Optional[bool] = None
+
         # Background tasks
         self._alerts_task: Optional[asyncio.Task] = None
         self._forecast_task: Optional[asyncio.Task] = None
         self._lightning_task: Optional[asyncio.Task] = None
+        self._rain_task: Optional[asyncio.Task] = None
         self._forecast_scheduler: Optional[BackgroundScheduler] = None
+        self._forecast_cycle_lock = threading.Lock()
+        self._forecast_cycle_id = 0
+        self._forecast_sent_cycle_id: Optional[int] = None
         self._running = False
+
+        # Rain nowcast episode state (dedup): which notice has fired for the
+        # current rain episode, and the last-push timestamps (cooldown backstop).
+        self._rain_start_announced = False
+        self._rain_end_announced = False
+        self._last_rain_start_time: Optional[float] = None
+        self._last_rain_end_time: Optional[float] = None
+        # "City, ST" / "City, Country" for the proactive push (cached separately
+        # from the daily-forecast location name).
+        self._cached_rain_location: Optional[str] = None
 
         # Track recent lightning strikes to avoid duplicates
         self.recent_lightning_strikes: set[str] = set()
@@ -118,6 +228,21 @@ class WeatherService(BaseServicePlugin):
         self._cached_location_name: Optional[str] = None
 
         self.logger.info(f"Weather service initialized: position=({self.my_position_lat}, {self.my_position_lon}), alarm={self.weather_alarm_time}")
+
+    def _translate(self, key: str, **kwargs: Any) -> str:
+        """Translate a key using the bot's translator.
+
+        Args:
+            key: Dot-separated key path (e.g., 'services.weather_service.daily_weather').
+            **kwargs: Formatting parameters for str.format().
+
+        Returns:
+            Translated string, or key if translation not found.
+        """
+        translator = getattr(self.bot, 'translator', None)
+        if translator is not None:
+            return translator.translate(key, **kwargs)
+        return key
 
     def _load_weather_model(self) -> Optional[str]:
         """Load and normalize Open-Meteo model selection from config.
@@ -162,6 +287,30 @@ class WeatherService(BaseServicePlugin):
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         return session
+
+    def _run_api_session_call(self, callback: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run one complete synchronous session operation under the session lock."""
+        with self._api_session_lock:
+            return callback(*args, **kwargs)
+
+    def _get_api_json(
+        self,
+        url: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        timeout: float,
+    ) -> tuple[requests.Response, Any]:
+        """Fetch and decode JSON as one serialized worker-thread operation."""
+        with self._api_session_lock:
+            response = self.api_session.get(url, params=params, timeout=timeout)
+            data = response.json() if response.ok else None
+            return response, data
+
+    def _get_api_text(self, url: str, *, timeout: float) -> tuple[requests.Response, str]:
+        """Fetch and decode text as one serialized worker-thread operation."""
+        with self._api_session_lock:
+            response = self.api_session.get(url, timeout=timeout)
+            return response, response.text if response.ok else ""
 
     def _get_sunrise_sunset_time(self, event: str) -> Optional[datetime]:
         """Get sunrise or sunset time for configured position.
@@ -216,6 +365,12 @@ class WeatherService(BaseServicePlugin):
         # Start background tasks
         self._alerts_task = asyncio.create_task(self._poll_weather_alerts_loop())
 
+        # Start proactive rain nowcast polling
+        if self.rain_nowcast_enabled:
+            self._rain_task = asyncio.create_task(self._poll_rain_nowcast_loop())
+        else:
+            self._rain_task = None
+
         # Start lightning detection if area is configured
         if self.blitz_area and MQTT_AVAILABLE:
             self._lightning_task = asyncio.create_task(self._poll_lightning_loop())
@@ -252,6 +407,11 @@ class WeatherService(BaseServicePlugin):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._lightning_task
 
+        if self._rain_task:
+            self._rain_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._rain_task
+
         if self.mqtt_task:
             self.mqtt_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -265,6 +425,7 @@ class WeatherService(BaseServicePlugin):
                 pass
 
         if self._forecast_scheduler is not None:
+            self._cancel_forecast_retry()
             try:
                 self._forecast_scheduler.shutdown(wait=False)
             except Exception as e:
@@ -292,7 +453,13 @@ class WeatherService(BaseServicePlugin):
                 self._forecast_scheduler = None
 
             tz, _ = get_config_timezone(self.bot.config, self.logger)
-            self._forecast_scheduler = BackgroundScheduler(timezone=tz)
+            self._forecast_scheduler = BackgroundScheduler(
+                timezone=tz,
+                job_defaults={
+                    'misfire_grace_time': FORECAST_MISFIRE_GRACE_SECONDS,
+                    'coalesce': True,
+                },
+            )
             self._forecast_scheduler.add_job(
                 self._send_daily_forecast,
                 CronTrigger(hour=hour, minute=minute),
@@ -308,6 +475,85 @@ class WeatherService(BaseServicePlugin):
             )
         except Exception as e:
             self.logger.error(f"Error setting up daily forecast schedule: {e}")
+
+    def _cancel_forecast_retry(self) -> None:
+        scheduler = self._forecast_scheduler
+        if scheduler is None:
+            return
+        try:
+            scheduler.remove_job(FORECAST_RETRY_JOB_ID)
+        except JobLookupError:
+            pass
+
+    def _begin_forecast_cycle(self) -> tuple[int, datetime]:
+        with self._forecast_cycle_lock:
+            self._forecast_cycle_id += 1
+            cycle_id = self._forecast_cycle_id
+            self._forecast_sent_cycle_id = None
+        self._cancel_forecast_retry()
+        return cycle_id, datetime.now(timezone.utc)
+
+    def _forecast_cycle_is_pending(self, cycle_id: int) -> bool:
+        with self._forecast_cycle_lock:
+            return (
+                cycle_id == self._forecast_cycle_id
+                and self._forecast_sent_cycle_id != cycle_id
+            )
+
+    def _claim_forecast_send(self, cycle_id: int) -> bool:
+        with self._forecast_cycle_lock:
+            if (
+                cycle_id != self._forecast_cycle_id
+                or self._forecast_sent_cycle_id == cycle_id
+            ):
+                return False
+            self._forecast_sent_cycle_id = cycle_id
+            return True
+
+    def _schedule_forecast_retry(
+        self,
+        cycle_id: int,
+        cycle_started_at: datetime,
+        retry_attempt: int,
+    ) -> None:
+        next_attempt = retry_attempt + 1
+        if next_attempt > len(FORECAST_RETRY_OFFSETS_SECONDS):
+            self.logger.warning(
+                "Daily weather forecast retries exhausted after %d attempts",
+                len(FORECAST_RETRY_OFFSETS_SECONDS),
+            )
+            return
+
+        scheduler = self._forecast_scheduler
+        if scheduler is None or not self._running:
+            return
+
+        retry_at = cycle_started_at + timedelta(
+            seconds=FORECAST_RETRY_OFFSETS_SECONDS[next_attempt - 1]
+        )
+        now = datetime.now(timezone.utc)
+        if retry_at <= now:
+            retry_at = now + timedelta(seconds=1)
+
+        with self._forecast_cycle_lock:
+            if (
+                cycle_id != self._forecast_cycle_id
+                or self._forecast_sent_cycle_id == cycle_id
+            ):
+                return
+            scheduler.add_job(
+                self._send_daily_forecast_retry,
+                trigger=DateTrigger(run_date=retry_at),
+                id=FORECAST_RETRY_JOB_ID,
+                args=[cycle_id, cycle_started_at, next_attempt],
+                replace_existing=True,
+            )
+        self.logger.warning(
+            "Daily weather forecast will retry at %s (attempt %d/%d)",
+            retry_at.isoformat(),
+            next_attempt,
+            len(FORECAST_RETRY_OFFSETS_SECONDS),
+        )
 
     async def _sunrise_sunset_forecast_loop(self) -> None:
         """Background task for sunrise/sunset-based forecasts.
@@ -369,14 +615,41 @@ class WeatherService(BaseServicePlugin):
         if not self._running:
             return
 
-        self.logger.info(f"📅 Sending daily weather forecast at {datetime.now().strftime('%H:%M:%S')}")
+        cycle_id, cycle_started_at = self._begin_forecast_cycle()
+        self._run_daily_forecast(cycle_id, cycle_started_at, retry_attempt=0)
+
+    def _send_daily_forecast_retry(
+        self,
+        cycle_id: int,
+        cycle_started_at: datetime,
+        retry_attempt: int,
+    ) -> None:
+        if not self._running or not self._forecast_cycle_is_pending(cycle_id):
+            return
+        self._run_daily_forecast(cycle_id, cycle_started_at, retry_attempt)
+
+    def _run_daily_forecast(
+        self,
+        cycle_id: int,
+        cycle_started_at: datetime,
+        retry_attempt: int,
+    ) -> None:
+        self.logger.info(
+            "📅 Sending daily weather forecast at %s%s",
+            datetime.now().strftime('%H:%M:%S'),
+            f" (retry {retry_attempt})" if retry_attempt else "",
+        )
 
         # Use the main event loop if available, otherwise create a new one
         # This prevents deadlock when the main loop is already running
         if hasattr(self.bot, 'main_event_loop') and self.bot.main_event_loop and self.bot.main_event_loop.is_running():
             # Schedule coroutine in the running main event loop
             future = asyncio.run_coroutine_threadsafe(
-                self._send_daily_forecast_async(),
+                self._send_daily_forecast_async(
+                    cycle_id,
+                    cycle_started_at,
+                    retry_attempt,
+                ),
                 self.bot.main_event_loop
             )
             # Wait for completion (with timeout to prevent indefinite blocking)
@@ -392,29 +665,64 @@ class WeatherService(BaseServicePlugin):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            loop.run_until_complete(self._send_daily_forecast_async())
+            loop.run_until_complete(
+                self._send_daily_forecast_async(
+                    cycle_id,
+                    cycle_started_at,
+                    retry_attempt,
+                )
+            )
 
-    async def _send_daily_forecast_async(self) -> None:
+    async def _send_daily_forecast_async(
+        self,
+        cycle_id: Optional[int] = None,
+        cycle_started_at: Optional[datetime] = None,
+        retry_attempt: int = 0,
+    ) -> bool:
         """Send daily weather forecast (async implementation).
 
         Fetches the forecast and sends it to the configured channel.
         Uses Open-Meteo for weather data and manages its own error logging.
         """
-        try:
-            # Get weather forecast
-            forecast_text = await self._get_weather_forecast()
+        if cycle_id is not None and not self._forecast_cycle_is_pending(cycle_id):
+            return False
 
-            if forecast_text and forecast_text != "Error fetching weather data":
-                # Send to configured channel
-                await self.bot.command_manager.send_channel_message(
-                    self.weather_channel,
-                    f"🌤️ Daily Weather: {forecast_text}"
-                )
-                self.logger.info(f"Daily weather forecast sent to {self.weather_channel}")
-            else:
+        try:
+            result = await self._get_weather_forecast_result()
+
+            error_label = self._translate('services.weather_service.error_fetching')
+            if result.retryable:
+                if cycle_id is not None and cycle_started_at is not None:
+                    self._schedule_forecast_retry(
+                        cycle_id,
+                        cycle_started_at,
+                        retry_attempt,
+                    )
                 self.logger.warning("Failed to get weather forecast for daily update")
+                return False
+
+            if result.text and result.text != error_label:
+                if cycle_id is not None and not self._claim_forecast_send(cycle_id):
+                    return False
+                self._cancel_forecast_retry()
+                daily_label = self._translate('services.weather_service.daily_weather')
+                sent = await self.bot.command_manager.send_channel_message(
+                    self.weather_channel,
+                    f"🌤️ {daily_label}: {result.text}",
+                    scope=self.get_mesh_flood_scope(),
+                )
+                if sent:
+                    self.logger.info(f"Daily weather forecast sent to {self.weather_channel}")
+                else:
+                    self.logger.warning(f"Daily weather forecast could not be sent to {self.weather_channel}")
+                return bool(sent)
+            else:
+                self._cancel_forecast_retry()
+                self.logger.warning("Failed to get weather forecast for daily update")
+                return False
         except Exception as e:
             self.logger.error(f"Error sending daily weather forecast: {e}")
+            return False
 
     async def _get_weather_forecast(self) -> str:
         """Get weather forecast for configured position using Open-Meteo API.
@@ -422,6 +730,10 @@ class WeatherService(BaseServicePlugin):
         Returns:
             str: Formatted forecast string or error message.
         """
+        return (await self._get_weather_forecast_result()).text
+
+    async def _get_weather_forecast_result(self) -> ForecastFetchResult:
+        """Fetch a forecast and retain whether a scheduled retry is appropriate."""
         try:
             # Open-Meteo API endpoint
             api_url = "https://api.open-meteo.com/v1/forecast"
@@ -441,22 +753,31 @@ class WeatherService(BaseServicePlugin):
                 params['models'] = self.weather_model
 
             try:
-                response = self.api_session.get(api_url, params=params, timeout=10)
+                response, data = await asyncio.to_thread(
+                    self._get_api_json,
+                    api_url,
+                    params=params,
+                    timeout=10,
+                )
                 if not response.ok:
                     self.logger.warning(f"Error fetching weather from Open-Meteo: HTTP {response.status_code}")
-                    return "Error fetching weather data"
+                    return ForecastFetchResult(
+                        self._translate('services.weather_service.error_fetching'),
+                        retryable=response.status_code in TRANSIENT_FORECAST_HTTP_STATUSES,
+                    )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self.logger.warning(f"Timeout/connection error fetching weather: {e}")
-                return "Error fetching weather data"
-
-            data = response.json()
+                return ForecastFetchResult(
+                    self._translate('services.weather_service.error_fetching'),
+                    retryable=True,
+                )
 
             # Extract current conditions
             current = data.get('current', {})
             daily = data.get('daily', {})
 
             if not current or not daily:
-                return "No forecast data available"
+                return ForecastFetchResult(self._translate('services.weather_service.no_data'))
 
             # Current conditions
             temp = int(current.get('temperature_2m', 0))
@@ -507,15 +828,20 @@ class WeatherService(BaseServicePlugin):
             # Format current forecast
             forecast_text = f"{location_name}: {weather_emoji}{weather_desc} {temp}{temp_symbol}"
             if wind_speed > 0:
-                wind_dir_str = f"{wind_direction}" if wind_direction else ""
-                forecast_text += f" {wind_dir_str}{wind_speed}{self.wind_speed_unit}"
+                wind_unit_label = alert_format.translate_or(
+                    getattr(self.bot, 'translator', None),
+                    f'services.weather_service.wind_speed_units.{self.wind_speed_unit}',
+                    self.wind_speed_unit,
+                )
+                forecast_text += f" {wind_direction}{wind_speed}{wind_unit_label}"
 
             today_high = int(daily['temperature_2m_max'][0])
             today_low = int(daily['temperature_2m_min'][0])
             forecast_text += (
                 " | "
                 + format_temperature_high_low(
-                    self.bot.config, today_high, today_low, temp_symbol, self.logger
+                    self.bot.config, today_high, today_low, temp_symbol, self.logger,
+                    translator=getattr(self.bot, 'translator', None),
                 )
             )
 
@@ -533,6 +859,7 @@ class WeatherService(BaseServicePlugin):
                 tomorrow_emoji = self._get_weather_emoji(tomorrow_code)
 
                 if tomorrow_max is not None:
+                    tomorrow_label = self._translate('services.weather_service.tomorrow')
                     if tomorrow_min is not None and tomorrow_min != tomorrow_max:
                         hl = format_temperature_high_low(
                             self.bot.config,
@@ -540,8 +867,9 @@ class WeatherService(BaseServicePlugin):
                             tomorrow_min,
                             temp_symbol,
                             self.logger,
+                            translator=getattr(self.bot, 'translator', None),
                         )
-                        forecast_text += f" | Tomorrow: {tomorrow_emoji}{tomorrow_desc} {hl}"
+                        forecast_text += f" | {tomorrow_label}: {tomorrow_emoji}{tomorrow_desc} {hl}"
                     else:
                         hl = format_temperature_high_low(
                             self.bot.config,
@@ -549,16 +877,17 @@ class WeatherService(BaseServicePlugin):
                             None,
                             temp_symbol,
                             self.logger,
+                            translator=getattr(self.bot, 'translator', None),
                         )
-                        forecast_text += f" | Tomorrow: {tomorrow_emoji}{tomorrow_desc} {hl}"
+                        forecast_text += f" | {tomorrow_label}: {tomorrow_emoji}{tomorrow_desc} {hl}"
 
-            return forecast_text
+            return ForecastFetchResult(forecast_text)
 
         except Exception as e:
             self.logger.error(f"Error getting weather forecast: {e}")
             import traceback
             self.logger.debug(traceback.format_exc())
-            return "Error fetching weather data"
+            return ForecastFetchResult(self._translate('services.weather_service.error_fetching'))
 
     def _degrees_to_direction(self, degrees: float) -> str:
         """Convert wind direction in degrees to compass direction.
@@ -567,7 +896,7 @@ class WeatherService(BaseServicePlugin):
             degrees: Wind direction in degrees (0-360).
 
         Returns:
-            str: Compass direction (e.g., 'N', 'NE', 'SW').
+            str: Compass direction (e.g., 'N', 'NE', 'SW') in the current language.
         """
         if degrees is None:
             return ""
@@ -575,7 +904,10 @@ class WeatherService(BaseServicePlugin):
         directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
                      'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
         index = int((degrees + 11.25) / 22.5) % 16
-        return directions[index]
+        key = directions[index]
+        return alert_format.translate_or(
+            getattr(self.bot, 'translator', None), f'common.wind_directions.{key}', key
+        )
 
     def _get_weather_description(self, code: int) -> str:
         """Get weather description from WMO weather code.
@@ -584,22 +916,14 @@ class WeatherService(BaseServicePlugin):
             code: WMO weather code integer.
 
         Returns:
-            str: Human-readable weather description.
+            str: Human-readable weather description, or the localized 'Unknown'
+                for a code we have no description for.
         """
-        # WMO Weather interpretation codes (WW)
-        codes = {
-            0: "Clear", 1: "Mostly Clear", 2: "Partly Cloudy", 3: "Overcast",
-            45: "Foggy", 48: "Depositing Rime Fog",
-            51: "Light Drizzle", 53: "Moderate Drizzle", 55: "Dense Drizzle",
-            56: "Light Freezing Drizzle", 57: "Dense Freezing Drizzle",
-            61: "Slight Rain", 63: "Moderate Rain", 65: "Heavy Rain",
-            66: "Light Freezing Rain", 67: "Heavy Freezing Rain",
-            71: "Slight Snow", 73: "Moderate Snow", 75: "Heavy Snow",
-            77: "Snow Grains", 80: "Slight Rain Showers", 81: "Moderate Rain Showers",
-            82: "Violent Rain Showers", 85: "Slight Snow Showers", 86: "Heavy Snow Showers",
-            95: "Thunderstorm", 96: "Thunderstorm w/Hail", 99: "Severe Thunderstorm"
-        }
-        return codes.get(code, "Unknown")
+        translator = getattr(self.bot, 'translator', None)
+        unknown = alert_format.translate_or(translator, 'common.unknown', 'Unknown')
+        return alert_format.translate_or(
+            translator, f'services.weather_service.weather_descriptions.{code}', unknown
+        )
 
     def _get_weather_emoji(self, code: int) -> str:
         """Get weather emoji from WMO weather code.
@@ -663,6 +987,9 @@ class WeatherService(BaseServicePlugin):
                 # Subsequent checks: only get alerts since last check
                 time_window_start = self.last_alert_check_time
 
+            if self._nws_alerts_available is False:
+                return
+
             # Round coordinates
             lat_rounded = round(self.my_position_lat, 4)
             lon_rounded = round(self.my_position_lon, 4)
@@ -671,17 +998,31 @@ class WeatherService(BaseServicePlugin):
             alert_url = f"https://api.weather.gov/alerts/active.atom?point={lat_rounded},{lon_rounded}"
 
             try:
-                alert_data = self.api_session.get(alert_url, timeout=10)
+                alert_data, alert_text = await asyncio.to_thread(
+                    self._get_api_text,
+                    alert_url,
+                    timeout=10,
+                )
                 if not alert_data.ok:
-                    self.logger.debug(f"Error fetching alerts: HTTP {alert_data.status_code}")
+                    if nws_http_means_no_coverage(alert_data.status_code):
+                        self._nws_alerts_available = False
+                        self.logger.warning(
+                            "NWS weather alerts unavailable (HTTP %s); NOAA alerts are US-only — "
+                            "skipping future alert polls",
+                            alert_data.status_code,
+                        )
+                    else:
+                        self.logger.debug(f"Error fetching alerts: HTTP {alert_data.status_code}")
                     return
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self.logger.debug(f"Timeout/connection error fetching alerts: {e}")
                 return
 
+            self._nws_alerts_available = True
+
             # Parse ATOM feed with full metadata extraction (same as wx_command)
             alerts = []
-            alertxml = xml.dom.minidom.parseString(alert_data.text)
+            alertxml = await asyncio.to_thread(xml.dom.minidom.parseString, alert_text)
 
             for entry in alertxml.getElementsByTagName("entry"):
                 try:
@@ -744,7 +1085,8 @@ class WeatherService(BaseServicePlugin):
 
                     await self.bot.command_manager.send_channel_message(
                         self.alerts_channel,
-                        alert_text
+                        alert_text,
+                        scope=self.get_mesh_flood_scope(),
                     )
                     self.logger.info(f"Weather alert sent: {alert.get('title', 'Unknown')}")
 
@@ -763,6 +1105,153 @@ class WeatherService(BaseServicePlugin):
 
         except Exception as e:
             self.logger.error(f"Error checking weather alerts: {e}")
+
+    async def _poll_rain_nowcast_loop(self) -> None:
+        """Background task: poll for incoming rain and push a heads-up once per episode."""
+        self.logger.info(
+            f"Starting rain nowcast polling (interval: {self.poll_rain_nowcast_interval}s, "
+            f"lead: {self.rain_nowcast_lead_minutes}min)"
+        )
+        while self._running:
+            try:
+                await self._check_rain_nowcast()
+                await asyncio.sleep(self.poll_rain_nowcast_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Error in rain nowcast polling loop: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute on error before retrying
+
+    async def _check_rain_nowcast(self) -> None:
+        """Fetch the precip nowcast for the bot's position and push if rain is incoming."""
+        try:
+            # Prefer the NWS gridpoint (forecaster-adjusted QPF + PoP — it captures
+            # the convection the Open-Meteo model smooths away, which is why this
+            # push could stay silent during real rain). Fall back to Open-Meteo when
+            # NWS has no coverage (non-US) or the request fails.
+            series = await asyncio.to_thread(
+                self._run_api_session_call,
+                fetch_precip_series_nws,
+                self.api_session,
+                self.my_position_lat,
+                self.my_position_lon,
+                timeout=10,
+                logger=self.logger,
+                cache_ttl=self.rain_nowcast_cache_seconds,
+            )
+            if not series:
+                series = await asyncio.to_thread(
+                    self._run_api_session_call,
+                    fetch_precip_series,
+                    self.api_session,
+                    self.my_position_lat,
+                    self.my_position_lon,
+                    weather_model=self.weather_model or "",
+                    timeout=10,
+                    logger=self.logger,
+                )
+            if not series:
+                return
+
+            # Look at least as far ahead as the lead window (plus a margin so we can
+            # estimate how long the rain lasts).
+            window = max(120, self.rain_nowcast_lead_minutes + 15)
+            result = analyze_precip_nowcast(
+                series["times"], series["precip"], series["codes"], series["now"],
+                window_minutes=window, threshold=self.rain_nowcast_threshold_mm,
+                current_precip=series.get("current_precip"), current_code=series.get("current_code"),
+                snow=series.get("snow"),
+            )
+            if result is None:
+                return
+
+            prob, temp_f = episode_probability_temp(series, result)
+            # Probability gate: skip a low-confidence "incoming" alert, and leave
+            # the announced flag unset so it can still fire if confidence rises.
+            if result.state == "dry_incoming" and prob is not None and prob < self.rain_nowcast_min_probability:
+                return
+
+            now_ts = time.time()
+            since_start = None if self._last_rain_start_time is None else (now_ts - self._last_rain_start_time)
+            since_end = None if self._last_rain_end_time is None else (now_ts - self._last_rain_end_time)
+            kind, self._rain_start_announced, self._rain_end_announced = decide_rain_notification(
+                result.state,
+                result.minutes,
+                lead_minutes=self.rain_nowcast_lead_minutes,
+                start_announced=self._rain_start_announced,
+                end_announced=self._rain_end_announced,
+                seconds_since_last_start=since_start,
+                seconds_since_last_end=since_end,
+                renotify_minutes=self.rain_nowcast_renotify_minutes,
+                announce_ending=self.rain_nowcast_announce_ending,
+            )
+            if kind is None:
+                return
+
+            message = await self._format_rain_nowcast(result, kind, prob, temp_f)
+            await self.bot.command_manager.send_channel_message(
+                self.rain_channel,
+                message,
+                scope=self.get_mesh_flood_scope(),
+            )
+            if kind == "starting":
+                self._last_rain_start_time = now_ts
+            else:
+                self._last_rain_end_time = now_ts
+            self.logger.info(f"Rain nowcast ({kind}) sent to {self.rain_channel}: {message}")
+
+        except Exception as e:
+            self.logger.error(f"Error checking rain nowcast: {e}")
+
+    async def _format_rain_nowcast(
+        self, result: Any, kind: str, prob: Optional[int] = None, temp_f: Optional[int] = None
+    ) -> str:
+        """Build the proactive heads-up line (English, mesh-friendly).
+
+        kind is "starting" (rain incoming) or "ending" (rain about to stop).
+        prob/temp_f add a probability and a borderline-temperature tag.
+        """
+        emoji, _ptype_en = precip_descriptor(result.bucket)
+        ptype = self._translate(f'commands.rain.precip_types.{result.bucket or "rain"}')
+
+        # City + state/country (same labeling as the !rain command), reverse-
+        # geocoded once and cached. Kept separate from the daily-forecast cache.
+        if self._cached_rain_location is None:
+            loop = asyncio.get_event_loop()
+            city, suffix = await loop.run_in_executor(
+                None,
+                lambda: reverse_geocode_region(
+                    self.bot, self.my_position_lat, self.my_position_lon, timeout=10, logger=self.logger
+                ),
+            )
+            self._cached_rain_location = join_location(city, suffix)
+        near_label = self._translate('services.weather_service.near')
+        location = f" {near_label} {self._cached_rain_location}" if self._cached_rain_location else ""
+
+        parts = []
+        if self.rain_nowcast_show_amount:
+            amt = format_amount_estimate(
+                result.bucket, result.amount_mm, result.snow_cm, self.rain_nowcast_amount_unit
+            )
+            if amt:
+                est_label = self._translate('services.weather_service.est')
+                parts.append(f"{est_label} {amt}")
+        if prob is not None:
+            parts.append(f"{prob}%")
+        est = f" ({', '.join(parts)})" if parts else ""
+        temp = f" {temp_f}°F" if (temp_f is not None and 30 <= temp_f <= 38) else ""
+        if kind == "ending":
+            return self._translate(
+                'services.weather_service.rain_ending',
+                emoji=emoji, ptype=ptype, minutes=result.minutes, est=est, temp=temp, location=location,
+            )
+        # Flag prolonged rain ("steady") rather than a numeric duration, which
+        # would sit confusingly next to the minutes-until-start value.
+        steady_label = f" ({self._translate('services.weather_service.steady')})" if result.open_ended else ""
+        return self._translate(
+            'services.weather_service.rain_starting',
+            emoji=emoji, ptype=ptype, minutes=result.minutes, est=est, steady=steady_label, temp=temp, location=location,
+        )
 
     async def _connect_blitzortung_mqtt(self) -> None:
         """Connect to Blitzortung MQTT broker and subscribe to lightning data.
@@ -973,7 +1462,8 @@ class WeatherService(BaseServicePlugin):
 
                 await self.bot.command_manager.send_channel_message(
                     self.alerts_channel,
-                    message
+                    message,
+                    scope=self.get_mesh_flood_scope(),
                 )
                 self.logger.info(f"Lightning alert sent: {message}")
 
@@ -1019,7 +1509,12 @@ class WeatherService(BaseServicePlugin):
         try:
             # Use reverse geocoding if available in utils
             from ..utils import rate_limited_nominatim_reverse_sync
-            location = rate_limited_nominatim_reverse_sync(self.bot, f"{lat}, {lon}", timeout=5)
+            location = await asyncio.to_thread(
+                rate_limited_nominatim_reverse_sync,
+                self.bot,
+                f"{lat}, {lon}",
+                timeout=5,
+            )
             if location:
                 # Extract city/town name
                 if isinstance(location, dict):
@@ -1308,243 +1803,37 @@ class WeatherService(BaseServicePlugin):
             return None
 
     async def _format_alert_compact(self, alert: dict[str, Any], include_details: bool = True) -> str:
-        """Format a single alert compactly (same as wx_command).
+        """Format a single alert compactly, appending a shortened link if it fits.
+
+        Shares its formatting with ``!wx alerts`` via ``modules.alert_format``;
+        only the link shortening (which needs async work) lives here.
 
         Args:
             alert: Alert dict with event, event_type, severity, expires, office, etc.
-            include_details: If True, include expiration time and office.
+            include_details: If True, include location, expiration time and office.
 
         Returns:
             str: Formatted alert string.
         """
-        event = alert.get('event', '')
-        event_type = alert.get('event_type', '')
-        severity = alert.get('severity', 'Unknown')
-        expires = alert.get('expires', '')
-        office = alert.get('office', '')
-        link_url = alert.get('link', '')
-        area_desc = alert.get('area_desc', '')
-
-        # Get severity emoji
-        severity_emoji = {
-            'Extreme': '🔴',
-            'Severe': '🟠',
-            'Moderate': '🟡',
-            'Minor': '⚪',
-            'Unknown': '⚪'
-        }.get(severity, '⚪')
-
-        # Format event type abbreviation
-        event_type_abbrev = {
-            'Warning': 'Warn',
-            'Watch': 'Watch',
-            'Advisory': 'Adv',
-            'Statement': 'Stmt'
-        }.get(event_type, event_type)
-
-        # Build compact alert string
-        if include_details:
-            result = severity_emoji
-
-            # Add event and type
-            if event:
-                event_lower = event.lower()
-                event_type_lower = event_type.lower()
-                if event_type_lower in event_lower:
-                    event_short = event
-                    if len(event) > 15:
-                        words = event.split()
-                        event_short = ' '.join(words[:2]) if len(words) > 2 else event[:15]
-                    result += event_short
-                else:
-                    event_short = event
-                    if len(event) > 15:
-                        words = event.split()
-                        event_short = ' '.join(words[:2]) if len(words) > 2 else event[:15]
-                    result += f"{event_short} {event_type_abbrev}"
-            else:
-                result += event_type_abbrev
-
-            # Add location (area description) if available - compact format
-            if area_desc:
-                # Extract first location from area_desc (often contains multiple locations)
-                # Format: "Seattle, WA" or "King County; Snohomish County" etc.
-                locations = [loc.strip() for loc in area_desc.split(';')]
-                first_location = locations[0]
-
-                # Try to extract just city/area name if it's long
-                # e.g., "Seattle, WA" -> "Seattle" or "King County" -> "King"
-                if ',' in first_location:
-                    # Has state/country - take just the city part
-                    location_parts = first_location.split(',')
-                    location_short = location_parts[0].strip()
-                else:
-                    # No comma, might be "King County" -> take first word
-                    location_words = first_location.split()
-                    if len(location_words) > 1 and location_words[-1].lower() in ['county', 'parish', 'borough']:
-                        location_short = location_words[0]
-                    else:
-                        location_short = first_location
-
-                # Limit location length to keep message compact
-                if len(location_short) > 20:
-                    location_short = location_short[:20]
-
-                result += f" {location_short}"
-
-            # Add expiration time if available
-            if expires:
-                expires_compact = self._compact_time(expires)
-                if any(month in expires_compact for month in ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]):
-                    time_match = re.search(r'(\d+)(AM|PM)', expires_compact, re.IGNORECASE)
-                    if time_match:
-                        hour = time_match.group(1)
-                        am_pm = time_match.group(2)
-                        expires_short = f" til {hour}{am_pm}"
-                    else:
-                        expires_short = f" til {expires_compact[:15]}"
-                else:
-                    time_match = re.search(r'(\d+):?(\d+)?(AM|PM)', expires_compact, re.IGNORECASE)
-                    if time_match:
-                        hour = time_match.group(1)
-                        am_pm = time_match.group(3)
-                        expires_short = f" til {hour}{am_pm}"
-                    else:
-                        expires_short = f" til {expires_compact[:15]}"
-                result += expires_short
-
-            # Add office if available (abbreviate city name)
-            if office:
-                office_parts = office.split()
-                if len(office_parts) >= 2:
-                    office_org = office_parts[0]
-                    city = office_parts[1] if len(office_parts) > 1 else ""
-                    city_abbrev = self._abbreviate_city_name(city)
-                    office_short = f" by {office_org} {city_abbrev}"
-                else:
-                    office_short = f" by {office[:10]}"
-                result += office_short
-
-            # Add shortened URL if available and there's space (within 130 char limit)
-            if link_url and len(result) < 100:  # Leave ~30 chars for shortened URL
-                short_url = await self._shorten_url(link_url)
-                if short_url:
-                    test_result = result + f" {short_url}"
-                    if len(test_result) <= 130:  # Mesh message limit
-                        result = test_result
-                    # If even shortened doesn't fit, try with just a link indicator
-                    elif len(result) < 120:
-                        result = result + " 🔗"
-
+        result = alert_format.format_alert_compact(
+            alert, getattr(self.bot, 'translator', None), include_details=include_details
+        )
+        if not include_details:
             return result
-        else:
-            return f"{severity_emoji}{event} {event_type_abbrev}" if event else f"{severity_emoji}{event_type_abbrev}"
 
-    def _compact_time(self, time_str: str) -> str:
-        """Compact time format (same as wx_command).
+        link_url = alert.get('link', '')
+        # Leave ~30 chars for the shortened URL inside the 130-char mesh limit.
+        if link_url and len(result) < 100:
+            short_url = await self._shorten_url(link_url)
+            if short_url:
+                with_url = f"{result} {short_url}"
+                if len(with_url) <= 130:
+                    result = with_url
+                elif len(result) < 120:
+                    # Even shortened it does not fit; signal that a link exists.
+                    result += " 🔗"
 
-        Args:
-            time_str: Time string to format.
-
-        Returns:
-            str: Compact formatted time string.
-        """
-        if not time_str:
-            return time_str
-
-        # Check if it's ISO format
-        if 'T' in time_str and re.match(r'\d{4}-\d{2}-\d{2}T', time_str):
-            try:
-                dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-                month_abbrevs = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                month = month_abbrevs[dt.month - 1]
-                day = dt.day
-                hour = dt.hour
-
-                if hour == 0:
-                    hour_12 = 12
-                    am_pm = "AM"
-                elif hour < 12:
-                    hour_12 = hour
-                    am_pm = "AM"
-                elif hour == 12:
-                    hour_12 = 12
-                    am_pm = "PM"
-                else:
-                    hour_12 = hour - 12
-                    am_pm = "PM"
-
-                return f"{month} {day} {hour_12}{am_pm}"
-            except Exception:
-                pass
-
-        # Remove leading zeros from hours
-        time_str = re.sub(r'(\d+):00(AM|PM)', r'\1\2', time_str)
-
-        # Abbreviate month names
-        month_abbrev_map = {
-            "January": "Jan", "February": "Feb", "March": "Mar", "April": "Apr",
-            "May": "May", "June": "Jun", "July": "Jul", "August": "Aug",
-            "September": "Sep", "October": "Oct", "November": "Nov", "December": "Dec"
-        }
-        for full, abbrev in month_abbrev_map.items():
-            time_str = time_str.replace(full, abbrev)
-
-        # Remove "at" before time
-        time_str = re.sub(r'\s+at\s+', ' ', time_str)
-
-        return time_str
-
-    def _abbreviate_city_name(self, city: str) -> str:
-        """Abbreviate city names for compact display (same as wx_command).
-
-        Args:
-            city: Full city name.
-
-        Returns:
-            str: Abbreviated city name.
-        """
-        if not city:
-            return city
-
-        city_abbrevs = {
-            "Seattle": "SEA", "Portland": "PDX", "San Francisco": "SF",
-            "Los Angeles": "LA", "New York": "NYC", "Chicago": "CHI",
-            "Houston": "HOU", "Phoenix": "PHX", "Philadelphia": "PHL",
-            "San Antonio": "SAT", "San Diego": "SAN", "Dallas": "DAL",
-            "San Jose": "SJC", "Austin": "AUS", "Jacksonville": "JAX",
-            "Columbus": "CMH", "Fort Worth": "FTW", "Charlotte": "CLT",
-            "Denver": "DEN", "Washington": "DC", "Boston": "BOS",
-            "El Paso": "ELP", "Detroit": "DTW", "Nashville": "BNA",
-            "Oklahoma City": "OKC", "Las Vegas": "LAS", "Memphis": "MEM",
-            "Louisville": "SDF", "Baltimore": "BWI", "Milwaukee": "MKE",
-            "Albuquerque": "ABQ", "Tucson": "TUS", "Fresno": "FAT",
-            "Sacramento": "SAC", "Kansas City": "KC", "Mesa": "MSC",
-            "Atlanta": "ATL", "Omaha": "OMA", "Colorado Springs": "COS",
-            "Raleigh": "RDU", "Virginia Beach": "ORF", "Miami": "MIA",
-            "Oakland": "OAK", "Minneapolis": "MSP", "Tulsa": "TUL",
-            "Cleveland": "CLE", "Wichita": "ICT", "Arlington": "ARL",
-            "Tampa": "TPA", "New Orleans": "MSY", "Honolulu": "HNL",
-            "Anchorage": "ANC", "Bellingham": "BLI", "Everett": "EVE",
-            "Spokane": "GEG", "Tacoma": "TAC", "Yakima": "YKM",
-            "Olympia": "OLM", "Vancouver": "YVR", "Victoria": "YYJ"
-        }
-
-        if city in city_abbrevs:
-            return city_abbrevs[city]
-
-        for full_name, abbrev in city_abbrevs.items():
-            if full_name in city:
-                return abbrev
-
-        words = city.split()
-        if len(words) > 1:
-            abbrev = ''.join([w[0].upper() for w in words[:3]])
-            if len(abbrev) <= 4:
-                return abbrev
-
-        return city[:4].upper() if len(city) >= 4 else city.upper()
+        return result
 
     def _parse_iso_time(self, time_str: str) -> Optional[float]:
         """Parse ISO 8601 timestamp to Unix timestamp.
@@ -1699,10 +1988,11 @@ class WeatherService(BaseServicePlugin):
 
     async def _shorten_url(self, url: str) -> str:
         """Shorten URL using [External_Data] short_url_website (default v.gd)."""
-        return await shorten_url(
+        return await asyncio.to_thread(
+            self._run_api_session_call,
+            shorten_url_sync,
             url,
             config=self.bot.config,
             session=self.api_session,
             logger=self.logger,
         )
-

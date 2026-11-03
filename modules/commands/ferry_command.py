@@ -120,7 +120,7 @@ class FerryCommand(BaseCommand):
                     "ferries <terminal> or ferries <src> <dst>\nTerms: NAN, DUK, SWB, TSA, HSB, LNG, BOW, FUL")
                 return True
 
-            data = self._fetch()
+            data = await asyncio.to_thread(self._fetch)  # off the event loop
 
             # Two-terminal route lookup
             src_code, dst_code = self._split_two_terminals(content)

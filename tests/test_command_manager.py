@@ -271,6 +271,102 @@ class TestCheckKeywords:
         matches = manager.check_keywords(msg)
         assert any(trigger == "help" for trigger, _ in matches)
 
+    def test_help_subcommand_routes_to_base_command_with_full_message(self, cm_bot):
+        net_cmd = MagicMock()
+        net_cmd.keywords = ["net"]
+        net_cmd.get_help_text = Mock(return_value="Network help")
+        manager = make_manager(cm_bot, commands={"net": net_cmd})
+        message = mock_message(content="help net create", is_dm=True)
+
+        matches = manager.check_keywords(message)
+
+        assert any(trigger == "help" and "Network help" in response for trigger, response in matches)
+        net_cmd.get_help_text.assert_called_once_with(message)
+        assert message.content == "help net create"
+
+    def test_help_routing_preserves_exact_multiword_alias(self, cm_bot):
+        dadjoke_cmd = MagicMock()
+        dadjoke_cmd.keywords = ["dadjoke", "dad joke"]
+        dadjoke_cmd.get_help_text = Mock(return_value="Dad joke help")
+        unrelated_cmd = MagicMock()
+        unrelated_cmd.keywords = ["dad"]
+        unrelated_cmd.get_help_text = Mock(return_value="Wrong help")
+        manager = make_manager(
+            cm_bot,
+            commands={"dadjoke": dadjoke_cmd, "dad": unrelated_cmd},
+        )
+
+        matches = manager.check_keywords(mock_message(content="help dad joke", is_dm=True))
+
+        assert any(trigger == "help" and "Dad joke help" in response for trigger, response in matches)
+        dadjoke_cmd.get_help_text.assert_called_once()
+        unrelated_cmd.get_help_text.assert_not_called()
+
+    def test_help_disabled_no_response(self, cm_bot):
+        """[Help_Command] enabled=false must suppress the help response.
+
+        The special help path bypasses the plugin loop (where can_execute() enforces
+        enablement), so it has to honor the flag itself.
+        """
+        mock_help = MagicMock()
+        mock_help.help_enabled = False
+        mock_help.keywords = ["help"]
+        mock_help.should_execute = Mock(return_value=False)
+        manager = make_manager(cm_bot, commands={"help": mock_help})
+        msg = mock_message(content="help", is_dm=True)
+        matches = manager.check_keywords(msg)
+        assert not any(trigger == "help" for trigger, _ in matches)
+
+    def test_help_enabled_responds_when_command_loaded(self, cm_bot):
+        """A loaded, enabled help command still produces a help response."""
+        cm_bot.config.set("Keywords", "help", "Help: ping, test")
+        mock_help = MagicMock()
+        mock_help.help_enabled = True
+        mock_help.keywords = ["help"]
+        manager = make_manager(cm_bot, commands={"help": mock_help})
+        msg = mock_message(content="help", is_dm=True)
+        matches = manager.check_keywords(msg)
+        assert any(trigger == "help" for trigger, _ in matches)
+
+    def test_help_channel_override_blocks_disallowed_channel(self, cm_bot):
+        """[Help_Command] channels override must gate the special help path too.
+
+        The path bypasses the plugin loop (where is_channel_allowed is enforced), so
+        it has to consult the help command's channel access directly.
+        """
+        cm_bot.config.set("Keywords", "help", "Help: ping, test")
+        mock_help = MagicMock()
+        mock_help.help_enabled = True
+        mock_help.keywords = ["help"]
+        # Disallow the channel the message arrives on.
+        mock_help.is_channel_allowed = Mock(return_value=False)
+        mock_help.should_execute = Mock(return_value=False)
+        manager = make_manager(cm_bot, commands={"help": mock_help})
+
+        msg = mock_message(content="help", channel="general", is_dm=False)
+        matches = manager.check_keywords(msg)
+        assert not any(trigger == "help" for trigger, _ in matches)
+
+        # Allowed channel still responds.
+        mock_help.is_channel_allowed = Mock(return_value=True)
+        matches = manager.check_keywords(mock_message(content="help", channel="general", is_dm=False))
+        assert any(trigger == "help" for trigger, _ in matches)
+
+    def test_overheard_self_mention_not_stripped_issue_267(self, cm_bot):
+        """Keyword scan must not delete @[bot] from overheard non-command traffic (#267)."""
+        from modules.commands.ping_command import PingCommand
+
+        cm_bot.config.set("Bot", "bot_name", "IU1IPB-1")
+        cm_bot.config.set("Bot", "respond_to_mentions", "also")
+        ping = PingCommand(cm_bot)
+        manager = make_manager(cm_bot, commands={"ping": ping})
+        body = "ack @[IU1IPB-1] | 9d12,aa11,4039 (3 hops)"
+        msg = mock_message(content=body, channel="general", is_dm=False)
+        matches = manager.check_keywords(msg)
+        assert not any(trigger == "ping" for trigger, _ in matches)
+        assert msg.content == body
+        assert msg.original_content == body
+
 
 class TestGetHelpForCommand:
     """Tests for command-specific help."""
@@ -316,6 +412,37 @@ class TestGetHelpForCommand:
         manager.plugin_loader.keyword_mappings = {}
         result = manager.get_help_for_command("sched")
         assert "Schedule help" in result
+
+    def test_subcommand_help_resolves_base_command_and_preserves_message(self, cm_bot):
+        mock_cmd = MagicMock()
+        mock_cmd.keywords = ["net"]
+        mock_cmd.get_help_text = Mock(return_value="Create a network")
+        manager = make_manager(cm_bot, commands={"net": mock_cmd})
+        message = mock_message(content="help net create", is_dm=True)
+
+        result = manager.get_help_for_command("net create", message)
+
+        assert "Create a network" in result
+        mock_cmd.get_help_text.assert_called_once_with(message)
+        assert message.content == "help net create"
+
+    def test_multiword_alias_is_checked_before_subcommand_fallback(self, cm_bot):
+        dadjoke_cmd = MagicMock()
+        dadjoke_cmd.keywords = ["dadjoke", "dad joke"]
+        dadjoke_cmd.get_help_text = Mock(return_value="Dad joke help")
+        unrelated_cmd = MagicMock()
+        unrelated_cmd.keywords = ["dad"]
+        unrelated_cmd.get_help_text = Mock(return_value="Wrong help")
+        manager = make_manager(
+            cm_bot,
+            commands={"dadjoke": dadjoke_cmd, "dad": unrelated_cmd},
+        )
+
+        result = manager.get_help_for_command("dad joke")
+
+        assert "Dad joke help" in result
+        dadjoke_cmd.get_help_text.assert_called_once()
+        unrelated_cmd.get_help_text.assert_not_called()
 
 
 class TestInternetStatusCache:
@@ -456,6 +583,7 @@ class TestSendDMRecipientResolution:
                 "public_key": "ffffdeadbeefcafebabe",
             }
         }
+        cm_bot.meshcore.pending_contacts = {}
         cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
         manager = make_manager(cm_bot)
 
@@ -465,6 +593,76 @@ class TestSendDMRecipientResolution:
         cm_bot.meshcore.get_contact_by_name.assert_called_once_with("ab12")
         cm_bot.logger.error.assert_called()
         assert "Contact not found for DM recipient identifier" in cm_bot.logger.error.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_send_dm_resolves_pending_contact_by_pubkey_prefix(self, cm_bot):
+        """NEW_CONTACT peers live in pending_contacts until the next get_contacts()."""
+        from meshcore import EventType
+
+        cm_bot.connected = True
+        cm_bot.meshcore = Mock()
+        cm_bot.meshcore.get_contact_by_name = Mock(return_value=None)
+        cm_bot.meshcore.contacts = {}
+        pending_key = "3a2418b4ad42cafebabe0123456789abcdef0123456789abcdef0123456789"
+        cm_bot.meshcore.pending_contacts = {
+            pending_key: {
+                "name": "NewCompanion",
+                "adv_name": "NewCompanion",
+                "public_key": pending_key,
+            }
+        }
+        cm_bot.meshcore.commands = Mock(spec=["send_msg"])
+        cm_bot.meshcore.commands.send_msg = AsyncMock(return_value=Mock(type=EventType.MSG_SENT, payload=None))
+        cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
+        manager = make_manager(cm_bot)
+
+        result = await manager.send_dm("3a2418b4ad42", "Pong!")
+
+        assert result is True
+        sent_contact = cm_bot.meshcore.commands.send_msg.await_args.args[0]
+        assert sent_contact["public_key"] == pending_key
+        assert sent_contact["name"] == "NewCompanion"
+
+    @pytest.mark.asyncio
+    async def test_send_response_dm_uses_sender_pubkey_over_name(self, cm_bot):
+        """send_response for a DM must use sender_pubkey (not sender_id/name) to avoid
+        misrouting when two nodes share a similar display name."""
+        from meshcore import EventType
+
+        cm_bot.connected = True
+        cm_bot.meshcore = Mock()
+        # Name lookup by display name would resolve the WRONG node (same name prefix)
+        cm_bot.meshcore.get_contact_by_name = Mock(return_value=None)
+        cm_bot.meshcore.contacts = {
+            "contact1": {
+                "name": "Alice",
+                "adv_name": "Alice",
+                "public_key": "aabbccddeeff001122",
+            },
+            "contact2": {
+                "name": "Alice-repeater",
+                "adv_name": "Alice-repeater",
+                "public_key": "ffeeddccbbaa998877",
+            },
+        }
+        cm_bot.meshcore.commands = Mock(spec=["send_msg"])
+        cm_bot.meshcore.commands.send_msg = AsyncMock(return_value=Mock(type=EventType.MSG_SENT, payload=None))
+        cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
+        manager = make_manager(cm_bot)
+
+        msg = MeshMessage(
+            content="hello",
+            sender_id="Alice",
+            sender_pubkey="aabbccddeeff001122",
+            is_dm=True,
+        )
+
+        result = await manager.send_response(msg, "Hi back")
+
+        assert result is True
+        cm_bot.meshcore.get_contact_by_name.assert_called_once_with("aabbccddeeff001122")
+        sent_contact = cm_bot.meshcore.commands.send_msg.await_args.args[0]
+        assert sent_contact["public_key"] == "aabbccddeeff001122"
 
     @pytest.mark.asyncio
     async def test_failed_send_does_not_invoke_listeners(self, cm_bot):
@@ -822,6 +1020,96 @@ class TestSplitTextIntoChunks:
         assert all(len(c) == 1 for c in result)
 
 
+class TestSplitTextIntoUtf8Chunks:
+    """Tests for CommandManager.split_text_into_utf8_chunks."""
+
+    def test_short_text_single_chunk(self):
+        result = CommandManager.split_text_into_utf8_chunks("hello", 158)
+        assert result == ["hello"]
+
+    def test_empty_string(self):
+        result = CommandManager.split_text_into_utf8_chunks("", 158)
+        assert result == [""]
+
+    def test_splits_on_spaces_within_byte_budget(self):
+        text = "word " * 50  # 250 chars ASCII
+        result = CommandManager.split_text_into_utf8_chunks(text.strip(), 158)
+        assert len(result) >= 2
+        assert all(len(c.encode("utf-8")) <= 158 for c in result)
+
+    def test_never_splits_multibyte_codepoints(self):
+        # Each emoji is 4 UTF-8 bytes
+        text = "😀" * 50
+        result = CommandManager.split_text_into_utf8_chunks(text, 20)
+        assert all(len(c.encode("utf-8")) <= 20 for c in result)
+        assert "".join(result) == text
+        for chunk in result:
+            # Re-encoding round-trip must succeed (no truncated sequences)
+            chunk.encode("utf-8").decode("utf-8")
+
+    def test_prefers_newline_boundaries(self):
+        lines = [f"line-{i}-xxxxxxxx" for i in range(20)]
+        text = "\n".join(lines)
+        result = CommandManager.split_text_into_utf8_chunks(text, 80)
+        assert all(len(c.encode("utf-8")) <= 80 for c in result)
+        # Most chunks should be whole lines (no mid-line hard splits for this input)
+        for chunk in result:
+            for line in chunk.split("\n"):
+                if line:
+                    assert line.startswith("line-")
+
+
+class TestSendDMLengthGuard:
+    """Oversized DM payloads are auto-split before the radio send."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_dm_is_auto_split(self, cm_bot):
+        from meshcore import EventType
+
+        cm_bot.connected = True
+        cm_bot.meshcore = Mock()
+        contact = {"name": "Alice", "public_key": "ab12deadbeef"}
+        cm_bot.meshcore.get_contact_by_name = Mock(return_value=contact)
+        cm_bot.meshcore.commands = Mock(spec=["send_msg"])
+        cm_bot.meshcore.commands.send_msg = AsyncMock(
+            return_value=Mock(type=EventType.MSG_SENT, payload=None)
+        )
+        cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
+        cm_bot.config.set("Bot", "bot_tx_rate_limit_seconds", "0")
+        manager = make_manager(cm_bot)
+
+        oversized = "x" * 200
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("modules.command_manager.asyncio.sleep", AsyncMock())
+            result = await manager.send_dm("Alice", oversized)
+
+        assert result is True
+        assert cm_bot.meshcore.commands.send_msg.await_count >= 2
+        for call in cm_bot.meshcore.commands.send_msg.await_args_list:
+            payload = call.args[1]
+            assert len(payload.encode("utf-8")) <= 158
+
+    @pytest.mark.asyncio
+    async def test_under_budget_dm_sends_once(self, cm_bot):
+        from meshcore import EventType
+
+        cm_bot.connected = True
+        cm_bot.meshcore = Mock()
+        contact = {"name": "Alice", "public_key": "ab12deadbeef"}
+        cm_bot.meshcore.get_contact_by_name = Mock(return_value=contact)
+        cm_bot.meshcore.commands = Mock(spec=["send_msg"])
+        cm_bot.meshcore.commands.send_msg = AsyncMock(
+            return_value=Mock(type=EventType.MSG_SENT, payload=None)
+        )
+        cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
+        manager = make_manager(cm_bot)
+
+        result = await manager.send_dm("Alice", "short ok")
+
+        assert result is True
+        cm_bot.meshcore.commands.send_msg.assert_awaited_once()
+
+
 class TestGetMaxMessageLength:
     """Tests for CommandManager.get_max_message_length."""
 
@@ -876,6 +1164,12 @@ class TestGetMaxMessageLength:
         msg = MeshMessage(content="x", channel="general", is_dm=False)
         assert mgr.get_max_message_length(msg) == 137
 
+    def test_channel_flood_scope_reduces_budget_by_10_bytes(self):
+        mgr = self._make_manager(bot_name="LongBotName")
+        mgr.bot.config.set("Channels", "flood_scope.weather", "#sea")
+        msg = MeshMessage(content="x", channel="#Weather", is_dm=False)
+        assert mgr.get_max_message_length(msg) == 137
+
     def test_parity_with_base_command_get_max_message_length(self):
         """CommandManager must mirror BaseCommand byte budgets (PR #128)."""
         from tests.commands.test_base_command import _TestCommand
@@ -899,3 +1193,52 @@ class TestGetMaxMessageLength:
             m_len = mgr.get_max_message_length(msg)
             b_len = cmd.get_max_message_length(msg)
             assert m_len == b_len, (bot_name, username, is_dm, reply_scope, m_len, b_len)
+
+
+class TestExecuteCommandsErrorPath:
+    """The `except Exception` branch in execute_commands (PR #243)."""
+
+    @staticmethod
+    def _failing_command(exc):
+        command = MagicMock()
+        command.is_channel_allowed = Mock(return_value=True)
+        command.should_execute = Mock(return_value=True)
+        command.get_response_format = Mock(return_value=None)
+        command.can_execute_now = Mock(return_value=True)
+        command.requires_internet = False
+        command.cooldown_seconds = 0
+        command.last_response = None
+        command._record_execution = Mock()
+        command.execute = AsyncMock(side_effect=exc)
+        command.translate = Mock(side_effect=lambda key, **kw: f"{key}: {kw['error']}")
+        return command
+
+    @pytest.mark.asyncio
+    async def test_failure_is_logged_with_traceback(self, cm_bot):
+        manager = make_manager(cm_bot, commands={"boom": self._failing_command(RuntimeError("kaboom"))})
+        manager.send_response = AsyncMock(return_value=True)
+
+        await manager.execute_commands(mock_message(content="!boom", is_dm=True))
+
+        # logger.exception, not logger.error — the traceback is the whole point.
+        cm_bot.logger.exception.assert_called_once()
+        assert "kaboom" in cm_bot.logger.exception.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_mesh_reply_carries_only_the_exception_text(self, cm_bot):
+        """The reply goes out over RF, so it must not carry a filesystem path.
+
+        An earlier revision of #243 interpolated `file:line` from the traceback into
+        both the log line and this reply, which leaked the install path over the air
+        and spent airtime on the error path, where retries are most likely.
+        """
+        command = self._failing_command(RuntimeError("kaboom"))
+        manager = make_manager(cm_bot, commands={"boom": command})
+        manager.send_response = AsyncMock(return_value=True)
+
+        await manager.execute_commands(mock_message(content="!boom", is_dm=True))
+
+        assert command.translate.call_args.kwargs["error"] == "kaboom"
+        sent = manager.send_response.await_args.args[1]
+        assert sent == "errors.execution_error: kaboom"
+        assert ".py" not in sent and "command_manager" not in sent
