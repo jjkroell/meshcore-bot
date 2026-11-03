@@ -43,6 +43,7 @@ In order, each with `sudo bash`:
 3. `install-peer.sh` - shared channel + peer skip + message archive
 4. `install-offset.sh` - meshcore lib >= 2.3.17 for the clock offset
 5. `install-scheduler.sh` - schedule on the page (replaces the cron line)
+6. `install-announce.sh` - start / finish lines on the shared channel
 
 Config: `/etc/clock_sync/clock_sync.yaml` - `companion`, `admin_password`,
 `repeaters` (edited on the page), `summary_channel`, `peer_bots`, optional
