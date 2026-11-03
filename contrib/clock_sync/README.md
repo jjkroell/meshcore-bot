@@ -44,7 +44,8 @@ In order, each with `sudo bash`:
 4. `install-offset.sh` - meshcore lib >= 2.3.17 for the clock offset
 5. `install-scheduler.sh` - schedule on the page (replaces the cron line)
 6. `install-announce.sh` - start / finish lines on the shared channel
+7. `install-own-passwords.sh` - every node gets its own password (the shared one is copied to the nodes that used it, then removed)
 
-Config: `/etc/clock_sync/clock_sync.yaml` - `companion`, `admin_password`,
-`repeaters` (edited on the page), `summary_channel`, `peer_bots`, optional
+Config: `/etc/clock_sync/clock_sync.yaml` - `companion`, `repeaters` (edited
+on the page; each node has its own `admin_password`, there is no shared one), `summary_channel`, `peer_bots`, optional
 `bot_name`, `announce_runs`. Log: `/var/log/clock_sync/clock_sync.log`.

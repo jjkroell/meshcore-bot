@@ -3,10 +3,11 @@
 
 Edits the `repeaters:` list in /etc/clock_sync/clock_sync.yaml (read by
 /opt/clock_sync/clock_sync.py from cron). Only that list is ever rewritten:
-everything else in the file - admin_password, companion settings, comments -
-is left byte-for-byte as it was. Entries you don't touch keep their exact
-text (comments included); per-node keys the UI doesn't show (a node's own
-admin_password, say) are carried over on edit. Every save is re-parsed and
+everything else in the file - companion settings, comments - is left
+byte-for-byte as it was. Entries you don't touch keep their exact text
+(comments included); per-node keys the UI doesn't show are carried over on
+edit. Every node has its own admin_password (write-only here: the page is
+only told whether one is set); there is no shared one. Every save is re-parsed and
 checked before it replaces the file, and the previous file is kept in
 backups/.
 
@@ -189,8 +190,8 @@ def normalise_key(key: str) -> str:
 
 def apply_ops(text: str, cfg: dict, block: RepeatersBlock, ops: list[dict]) -> tuple[str, list[dict]]:
     """ops: the full desired list, in order: {id: <index in file> or None, name, pubkey,
-    password?: str (set this node's own admin password), clear_password?: bool (use the
-    shared one again)}. A missing password keeps whatever the node has.
+    password?: str (set or replace this node's admin password)}. A missing password
+    keeps whatever the node has; a new or edited node must end up with one.
     Returns (new text, new repeaters list)."""
     old = cfg["repeaters"]
     seen_ids: set[int] = set()
@@ -217,13 +218,12 @@ def apply_ops(text: str, cfg: dict, block: RepeatersBlock, ops: list[dict]) -> t
                 pw = None  # an empty box means "keep"
             elif len(pw) > 64 or "\n" in pw or "\r" in pw:
                 raise ValueError("admin password must be one line, up to 64 characters")
-        clear_pw = bool(op.get("clear_password")) and pw is None
         if orig is not None and pw is not None and orig.get("admin_password") == pw:
             pw = None  # same as before
-        if clear_pw and (orig is None or "admin_password" not in orig):
-            clear_pw = False
-        unchanged = (orig is not None and orig.get("name") == name and pw is None and not clear_pw
+        unchanged = (orig is not None and orig.get("name") == name and pw is None
                      and str(orig.get("pubkey_prefix") or "").lower() == raw_key)
+        if not unchanged and pw is None and not (orig or {}).get("admin_password"):
+            raise ValueError(f"{name} needs an admin password")
         key = raw_key if unchanged else normalise_key(raw_key)
         if key:
             keys.append((key, not unchanged))
@@ -237,8 +237,6 @@ def apply_ops(text: str, cfg: dict, block: RepeatersBlock, ops: list[dict]) -> t
             entry["pubkey_prefix"] = key
             if pw is not None:
                 entry["admin_password"] = pw
-            elif clear_pw:
-                entry.pop("admin_password", None)
             lead, _ = RepeatersBlock.split_lead(block.chunks[oid])
             chunks.append(lead + block.render_entry(entry))
             new.append(entry)
@@ -654,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": i,
                     "name": r.get("name") or "",
                     "pubkey": key,
-                    "own_password": "admin_password" in r,  # never the value itself
+                    "has_password": bool(r.get("admin_password")),  # never the value itself
                     "hidden": sorted(k for k in r if k not in ("name", "pubkey_prefix", "admin_password")),
                     "last_success": by["ts"] if by else None,
                     "last_by": by,
@@ -858,8 +856,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
   <div><label for="nn">Name</label><input id="nn" placeholder="Label used in the log and channel summary"></div>
   <div><label for="nk">Public key or prefix (at least 6 hex)</label>
    <input id="nk" placeholder="e.g. 6df99f" autocomplete="off" spellcheck="false"></div>
-  <div><label for="np">Admin password (blank = shared one)</label>
-   <input id="np" type="password" autocomplete="new-password" placeholder="Shared password"></div>
+  <div><label for="np">Admin password</label>
+   <input id="np" type="password" autocomplete="new-password" placeholder="This node's admin password"></div>
   <div><button class="primary" id="add">Add</button></div>
  </div>
 </div>
@@ -905,11 +903,10 @@ function render(){
  $("#rows").innerHTML=data.nodes.map((n,i)=>editing===i?`
  <tr class="edit"><td><input id="en" value="${esc(n.name)}"></td><td><input id="ek" value="${esc(n.pubkey)}" spellcheck="false"></td>
  <td colspan="2"><label for="ep">Admin password</label><div class="pw">
-  <input id="ep" type="password" autocomplete="new-password" placeholder="${n.own_password?"Own one set — type to replace":"Shared — type to set its own"}">
-  ${n.own_password?'<label class="small"><input type="checkbox" id="ec" style="width:auto"> use shared</label>':""}</div>
+  <input id="ep" type="password" autocomplete="new-password" placeholder="${n.has_password?"Set — type to replace":"None set — type one"}"></div>
   ${n.hidden.length?`<div class="small muted">Kept as is: ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td class="actions"><button class="primary" onclick="saveEdit(${i})">Save</button> <button onclick="editing=null;render()">Cancel</button></td></tr>`:`
- <tr><td><b>${esc(n.name)}</b>${n.own_password?' <span class="chip" title="This node has its own admin password">own password</span>':""}${n.hidden.length?`<div class="small muted">+ ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
+ <tr><td><b>${esc(n.name)}</b>${n.has_password?"":' <span class="chip bad" title="No admin password set: the clock sync skips this node. Edit it to set one.">no password</span>'}${n.hidden.length?`<div class="small muted">+ ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td><code title="${esc(n.pubkey)}">${esc(n.pubkey.length>16?n.pubkey.slice(0,16)+"…":n.pubkey)}</code></td>
  <td>${ago(n.last_success)}</td><td>${outcome(n.last_run,n.last_by)}</td>
  <td class="actions"><button class="runone" onclick="runNow([data.nodes[${i}].name])" ${busy()?"disabled":""}>Run</button> <button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`).join("");
@@ -949,13 +946,13 @@ async function save(nodes,okText){
  if(j.warnings&&j.warnings.length)msg(okText+" Note: "+j.warnings.join(" "),"err");else msg(j.unchanged?"No change.":okText,"info");return true;}
 function current(){return data.nodes.map(n=>({id:n.id,name:n.name,pubkey:n.pubkey}));}
 async function saveEdit(i){const ns=current();ns[i].name=$("#en").value.trim();ns[i].pubkey=$("#ek").value.trim();
- if($("#ep").value)ns[i].password=$("#ep").value;else if($("#ec")&&$("#ec").checked)ns[i].clear_password=true;
+ if($("#ep").value)ns[i].password=$("#ep").value;
  await save(ns,`Saved ${ns[i].name}.`);}
 async function removeNode(i){const n=data.nodes[i];if(!confirm(`Remove ${n.name} from the clock sync?`))return;
  const ns=current();ns.splice(i,1);await save(ns,`Removed ${n.name}.`);}
 $("#add").onclick=async()=>{const name=$("#nn").value.trim(),pubkey=$("#nk").value.trim(),password=$("#np").value;
- if(!name||!pubkey){msg("Enter a name and a public key.","err");return;}
- if(await save([...current(),{id:null,name,pubkey,...(password?{password}:{})}],`Added ${name}.`)){$("#nn").value="";$("#nk").value="";$("#np").value="";$("#q").value="";}};
+ if(!name||!pubkey||!password){msg("Enter a name, a public key and the node's admin password.","err");return;}
+ if(await save([...current(),{id:null,name,pubkey,password}],`Added ${name}.`)){$("#nn").value="";$("#nk").value="";$("#np").value="";$("#q").value="";}};
 let t=null;
 $("#q").oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{const q=$("#q").value.trim();const s=$("#sugg");
  if(q.length<2){s.style.display="none";return;}

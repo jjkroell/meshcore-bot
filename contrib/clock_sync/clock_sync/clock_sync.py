@@ -55,6 +55,7 @@ class Outcome:
     SEND_FAILED = "SEND_FAILED"
     CONTACT_NOT_FOUND = "CONTACT_NOT_FOUND"
     SKIPPED_PEER = "SKIPPED_PEER"  # another time-sync bot reported this node synced recently
+    NO_PASSWORD = "NO_PASSWORD"  # the node has no admin_password in the config - not tried
 
 
 @dataclass
@@ -78,8 +79,9 @@ def load_config(path: str) -> dict:
         cfg = yaml.safe_load(f) or {}
     if not cfg.get("repeaters"):
         raise ValueError(f"No 'repeaters' list in {path}")
-    if not cfg.get("admin_password"):
-        raise ValueError(f"No 'admin_password' in {path}")
+    # Every node has its own admin_password; there is no shared one any more.
+    if "admin_password" in cfg:
+        logger.warning("Top-level admin_password in %s is ignored - each node needs its own", path)
     return cfg
 
 
@@ -653,7 +655,6 @@ async def run(cfg: dict) -> list[SyncResult]:
     login_timeout = cfg.get("login_timeout_seconds", DEFAULT_LOGIN_TIMEOUT)
     reply_timeout = cfg.get("reply_timeout_seconds", DEFAULT_REPLY_TIMEOUT)
     delay = cfg.get("delay_between_nodes_seconds", DEFAULT_DELAY_BETWEEN_NODES)
-    admin_password = cfg["admin_password"]
     reset_path = cfg.get("reset_path_before_sync", True)
     summary_channel = cfg.get("summary_channel")
     channel_scan_limit = cfg.get("channel_scan_limit", DEFAULT_CHANNEL_SCAN_LIMIT)
@@ -748,21 +749,25 @@ async def run(cfg: dict) -> list[SyncResult]:
                     results.append(result)
                     log_result(result)
                     continue  # nothing sent, so no delay before the next node
-                node_password = node_cfg.get("admin_password", admin_password)
-                result = await sync_one(
-                    mc,
-                    node_cfg,
-                    node_password,
-                    login_timeout,
-                    reply_timeout,
-                    reset_path,
-                    state,
-                    auto_clkreboot,
-                    clkreboot_min_hours,
-                    clkreboot_retry_delay,
-                    restore_missing,
-                    bot_db,
-                )
+                node_password = node_cfg.get("admin_password")
+                if node_password in (None, ""):
+                    result = SyncResult(node_cfg.get("name") or str(node_cfg.get("pubkey_prefix") or "?"),
+                                        Outcome.NO_PASSWORD, "no admin_password for this node in the config")
+                else:
+                    result = await sync_one(
+                        mc,
+                        node_cfg,
+                        node_password,
+                        login_timeout,
+                        reply_timeout,
+                        reset_path,
+                        state,
+                        auto_clkreboot,
+                        clkreboot_min_hours,
+                        clkreboot_retry_delay,
+                        restore_missing,
+                        bot_db,
+                    )
                 results.append(result)
                 log_result(result)
                 save_state(state_file, state)  # after every node, not just at the end - durable across crashes
@@ -775,7 +780,7 @@ async def run(cfg: dict) -> list[SyncResult]:
                         detail = f"({peer_parse.fmt_offset(result.offset)})" + (f" {detail.split(' - ', 1)[-1]}" if detail else "")
                     await post(format_post(result.node, key, result.outcome, detail))
 
-                if i != to_sync[-1]:
+                if i != to_sync[-1] and result.outcome != Outcome.NO_PASSWORD:
                     await asyncio.sleep(delay)
         except Exception:
             if announced:  # say so rather than leave the start message hanging
