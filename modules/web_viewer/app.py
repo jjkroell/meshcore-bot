@@ -1594,6 +1594,7 @@ class BotDataViewer:
                 for ds in entry.get('dynamic_sections', []):
                     dsec = ds['section']
                     prefix = ds.get('key_prefix', '') or ''
+                    display_prefix = ds.get('key_display_prefix', '') or ''
                     if dsec not in submitted_dyn:
                         # Payload didn't include this editor's rows (partial or
                         # scripted save) — leave the managed keys untouched
@@ -1605,6 +1606,8 @@ class BotDataViewer:
                     seen_disp: set[str] = set()
                     for row in rows:
                         rkey = (str(row.get('key', '')) or '').strip()
+                        if display_prefix:
+                            rkey = rkey.removeprefix(display_prefix).strip()
                         rval = row.get('value', '')
                         rval = '' if rval is None else str(rval)
                         if not rkey:

@@ -643,3 +643,56 @@ class TestPluginsApi:
         resp = client.get("/api/plugins/reload-status")
         assert resp.status_code == 200
         assert resp.get_json()["status"] is None
+
+
+class TestChannelListHashPrefix:
+    """The channel list shows #names but config.ini stores them without the #."""
+
+    @staticmethod
+    def _editor(client):
+        plugins = client.get("/api/plugins").get_json()["plugins"]
+        plugin = next(p for p in plugins if p["name"] == "channels")
+        return next(d for d in plugin["dynamic_sections"] if d["section"] == "Channels_List")
+
+    @staticmethod
+    def _save(client, rows):
+        return client.post(
+            "/api/plugins/command/channels",
+            json={"enabled": True, "values": {}, "dynamic_sections": {"Channels_List": rows}},
+        )
+
+    def test_editor_shows_hash(self, viewer):
+        keys = [i["key"] for i in self._editor(viewer.app.test_client())["items"]]
+        assert sorted(keys) == ["#seattle", "#tacoma"]
+
+    def test_hash_is_stored_without_hash(self, viewer, tmp_path):
+        resp = self._save(viewer.app.test_client(), [
+            {"key": "#kod-bot", "value": "Bot commands"},
+            {"key": "local-chat", "value": "Local chat"},
+            {"key": "#seattle", "value": "Seattle chat"},
+        ])
+        assert resp.status_code == 200
+        text = (tmp_path / "config.ini").read_text(encoding="utf-8")
+        assert "kod-bot = Bot commands" in text
+        assert "local-chat = Local chat" in text
+        assert "#kod-bot" not in text
+        assert "tacoma" not in text
+
+    def test_same_channel_with_and_without_hash_is_a_duplicate(self, viewer):
+        resp = self._save(viewer.app.test_client(), [
+            {"key": "#kod-bot", "value": "One"},
+            {"key": "kod-bot", "value": "Two"},
+        ])
+        assert resp.status_code == 400
+
+    def test_bare_hash_row_is_skipped(self, viewer, tmp_path):
+        resp = self._save(viewer.app.test_client(), [
+            {"key": "#", "value": "x"},
+            {"key": "#seattle", "value": "Seattle chat"},
+        ])
+        assert resp.status_code == 200
+        assert "= x" not in (tmp_path / "config.ini").read_text(encoding="utf-8")
+
+    def test_other_editors_still_refuse_hash(self):
+        from modules.web_viewer.app import _validate_dynamic_key
+        assert _validate_dynamic_key("#nope") is not None

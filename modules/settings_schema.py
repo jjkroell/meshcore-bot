@@ -633,15 +633,20 @@ def _read_dynamic_sections(config: configparser.ConfigParser, cls: type) -> list
             continue
         sec = ds["section"]
         prefix = ds.get("key_prefix", "") or ""
+        display_prefix = ds.get("key_display_prefix", "") or ""
+        items = read_section_items(config, sec, prefix)
+        for item in items:
+            item["key"] = f"{display_prefix}{item['key']}"
         result.append({
             "section": sec,
             "key_prefix": prefix,
+            "key_display_prefix": display_prefix,
             "label": ds.get("label", sec),
             "help": ds.get("help", ""),
             "key_label": ds.get("key_label", "Key"),
             "value_label": ds.get("value_label", "Value"),
             "key_placeholder": ds.get("key_placeholder", ""),
             "value_placeholder": ds.get("value_placeholder", ""),
-            "items": read_section_items(config, sec, prefix),
+            "items": items,
         })
     return result

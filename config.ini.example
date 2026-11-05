@@ -1649,6 +1649,15 @@ enabled = true
 [Channels_Command]
 enabled = true
 # channels =
+# Base address of a Ridgeline server. When set, a plain "channels" lists its confirmed
+# channels, busiest first, except those with "bot" or "test" in the name; "bots" lists those.
+# Falls back to [Channels_List] when empty or unreachable.
+# directory_url =
+# Comma-separated channels never to list (with or without the #)
+# directory_exclude = private-one, private-two
+[Bots_Command]
+enabled = true
+# channels =
 [Catfact_Command]
 enabled = true
 # channels =

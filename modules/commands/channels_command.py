@@ -8,6 +8,7 @@ import asyncio
 import re
 from typing import Optional
 
+from ..clients.channel_directory import get_directory, is_bot_channel, parse_exclude_list
 from ..models import MeshMessage
 from .base_command import BaseCommand
 
@@ -35,6 +36,14 @@ class ChannelsCommand(BaseCommand):
         {"name": "#channel", "description": "Get info on a specific channel"}
     ]
 
+    # Web-viewer settings schema (see modules/settings_schema.py).
+    settings_schema = [
+        {"key": "directory_url", "label": "Ridgeline address", "type": "str", "default": "",
+         "help": "Lists its confirmed channels, busiest first, instead of the list below. Empty = off."},
+        {"key": "directory_exclude", "label": "Never list", "type": "str", "default": "",
+         "help": "Comma-separated channels to keep out of channels and bots replies."},
+    ]
+
     # Web-viewer dynamic section editor (see modules/settings_schema.py).
     # Channel data lives in its own [Channels_List] section as a free-form list
     # of "name = description" entries; users add channels by appending rows.
@@ -42,12 +51,15 @@ class ChannelsCommand(BaseCommand):
         {
             "section": "Channels_List",
             "label": "Channel list",
-            "help": ("Channels listed by this command. Use 'name' for a general "
-                     "channel or 'category.name' to group it (e.g. weather.seattle). "
+            "help": ("Channels listed by this command. Use '#name' for a general "
+                     "channel or '#category.name' to group it (e.g. #weather.seattle). "
                      "The value is the channel's description."),
             "key_label": "Channel (or category.channel)",
+            # Shown with the #, stored without it: a # at the start of a
+            # config.ini line would make the whole entry a comment.
+            "key_display_prefix": "#",
             "value_label": "Description",
-            "key_placeholder": "seattle   or   weather.seattle",
+            "key_placeholder": "#seattle   or   #weather.seattle",
             "value_placeholder": "Seattle regional chat",
         }
     ]
@@ -60,6 +72,12 @@ class ChannelsCommand(BaseCommand):
         """
         super().__init__(bot)
         self.channels_enabled = self.get_config_value('Channels_Command', 'enabled', fallback=True, value_type='bool')
+        self.directory_url = self.get_config_value(
+            'Channels_Command', 'directory_url', fallback='', value_type='str'
+        ).strip()
+        self.directory_exclude = parse_exclude_list(self.get_config_value(
+            'Channels_Command', 'directory_exclude', fallback='', value_type='str'
+        ))
 
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
         """Check if this command can be executed with the given message.
@@ -166,6 +184,15 @@ class ChannelsCommand(BaseCommand):
                 await self._show_specific_channel(message, specific_channel)
                 return True
 
+            # Plain "channels": the live directory, when one is set and answers
+            if not sub_command:
+                directory_channels = await self._directory_channels()
+                if directory_channels:
+                    await self._send_multiple_messages(
+                        message, self._split_into_messages(directory_channels, None)
+                    )
+                    return True
+
             # Load channels from config (with sub-command support)
             channels = self._load_channels_from_config(sub_command)
 
@@ -193,6 +220,17 @@ class ChannelsCommand(BaseCommand):
             self.logger.error(f"Error in channels command: {e}")
             await self.send_response(message, self.translate('commands.channels.error_retrieving_channels', error=str(e)))
             return False
+
+    async def _directory_channels(self) -> list:
+        """Get the directory's channels, busiest first, without bot/test ones or exclusions."""
+        if not self.directory_url:
+            return []
+        directory = get_directory(self.directory_url, self.logger)
+        names = await asyncio.to_thread(directory.names)
+        return [
+            f"#{name}" for name in names
+            if not is_bot_channel(name) and name.lower() not in self.directory_exclude
+        ]
 
     def _load_channels_from_config(self, sub_command: str = None) -> dict:
         """Load channels from the Channels_List config section with optional sub-command filtering.
@@ -457,8 +495,8 @@ class ChannelsCommand(BaseCommand):
         """
         for i, msg_content in enumerate(messages):
             if i > 0:
-                # Small delay between messages to prevent overwhelming the network
-                await asyncio.sleep(0.5)
+                # Delay between messages to prevent overwhelming the network
+                await asyncio.sleep(1.0)
             # Per-user rate limit applies only to first message (trigger); skip for continuations
             await self.send_response(message, msg_content, skip_user_rate_limit=(i > 0))
 
