@@ -12,6 +12,9 @@ from ..clients.channel_directory import get_directory, is_bot_channel, parse_exc
 from ..models import MeshMessage
 from .base_command import BaseCommand
 
+MESSAGE_LIMIT = 130
+NUMBER_ROOM = len("10/10 ")
+
 
 class ChannelsCommand(BaseCommand):
     """Handles the channels command.
@@ -397,7 +400,7 @@ class ChannelsCommand(BaseCommand):
             await self.send_response(message, self.translate('commands.channels.error_retrieving_channel_info', error=str(e)))
 
     def _split_into_messages(self, channel_list: list, sub_command: str = None) -> list:
-        """Split channel list into multiple messages if they exceed 130 characters.
+        """Split channel list into messages of at most 130 characters, numbered 1/3, 2/3, ...
 
         Args:
             channel_list: List of channel string items.
@@ -406,53 +409,26 @@ class ChannelsCommand(BaseCommand):
         Returns:
             list: List of message strings ready for sending.
         """
-        messages = []
-
-        # Set appropriate header based on sub-command
-        current_message = self._get_header_for_subcommand(sub_command)
-        current_length = len(current_message)
-
-        for channel in channel_list:
-            # Check if adding this channel would exceed the limit
-            if current_length + len(channel) + 2 > 130:  # +2 for ", " separator
-                # Start a new message
-                expected_header = self._get_continuation_header_for_subcommand(sub_command)
-
-                if current_message != expected_header:
-                    messages.append(current_message.rstrip(", "))
-                    current_message = self.translate('commands.channels.headers.channels_cont')
-                    current_length = len(current_message)
-                else:
-                    # If even the first channel is too long, just send it alone
-                    messages.append(f"{expected_header}{channel}")
-                    current_message = self.translate('commands.channels.headers.channels_cont')
-                    current_length = len(current_message)
-                    continue
-
-            # Add channel to current message
-            initial_header = self._get_header_for_subcommand(sub_command)
-            continuation_header = self._get_continuation_header_for_subcommand(sub_command)
-            channels_cont = self.translate('commands.channels.headers.channels_cont')
-            if current_message in (initial_header, continuation_header, channels_cont):
-                current_message += channel
-            else:
-                current_message += f", {channel}"
-            current_length = len(current_message)
-
-        # Add the last message if it has content
-        header = self._get_continuation_header_for_subcommand(sub_command)
-        channels_cont = self.translate('commands.channels.headers.channels_cont')
-        if current_message != header and current_message != channels_cont:
-            messages.append(current_message)
-
-        # If no messages were created, send a default message
-        if not messages:
+        if not channel_list:
             if sub_command:
-                messages.append(self.translate('commands.channels.no_category_channels', category=sub_command))
-            else:
-                messages.append(self.translate('commands.channels.no_channels_configured'))
+                return [self.translate('commands.channels.no_category_channels', category=sub_command)]
+            return [self.translate('commands.channels.no_channels_configured')]
 
-        return messages
+        messages = []
+        current = self._get_header_for_subcommand(sub_command)
+        empty = True
+        for channel in channel_list:
+            addition = channel if empty else f", {channel}"
+            if not empty and len(current) + len(addition) > MESSAGE_LIMIT - NUMBER_ROOM:
+                messages.append(current)
+                current, addition = "", channel
+            current += addition
+            empty = False
+        messages.append(current)
+
+        if len(messages) == 1:
+            return messages
+        return [f"{i}/{len(messages)} {text}" for i, text in enumerate(messages, start=1)]
 
     def _get_header_for_subcommand(self, sub_command: str = None) -> str:
         """Get the appropriate header for a sub-command.
@@ -468,23 +444,7 @@ class ChannelsCommand(BaseCommand):
         elif sub_command and sub_command != "general":
             return self.translate('commands.channels.headers.category', category=sub_command.title())
         else:
-            return self.translate('commands.channels.headers.common_channels')
-
-    def _get_continuation_header_for_subcommand(self, sub_command: str = None) -> str:
-        """Get the appropriate header for continuation messages.
-
-        Args:
-            sub_command: The sub-command/category name.
-
-        Returns:
-            str: Continuation header string.
-        """
-        if sub_command == "Available categories":
-            return self.translate('commands.channels.headers.available_categories')
-        elif sub_command and sub_command != "general":
-            return self.translate('commands.channels.headers.category_channels', category=sub_command.title())
-        else:
-            return self.translate('commands.channels.headers.common_channels_cont')
+            return ""
 
     async def _send_multiple_messages(self, message: MeshMessage, messages: list) -> None:
         """Send multiple messages with delays between them.

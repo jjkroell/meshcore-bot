@@ -94,10 +94,7 @@ def _bot(url="https://example.test", exclude=""):
     bot.config = config
     bot.translator = MagicMock()
 
-    def translate(key, **kwargs):
-        return "Common channels: " if key.endswith("common_channels") else key
-
-    bot.translator.translate = Mock(side_effect=translate)
+    bot.translator.translate = Mock(side_effect=lambda key, **kwargs: key)
     bot.command_manager = MagicMock()
     bot.command_manager.monitor_channels = ["#kod-bot"]
     bot.command_manager.send_response = AsyncMock(return_value=True)
@@ -118,13 +115,13 @@ class TestChannelsReply:
         bot = _bot()
         await ChannelsCommand(bot).execute(mock_message(content="channels"))
         sent = bot.command_manager.send_response.call_args.args[1]
-        assert sent == "Common channels: #busy, #quiet"
+        assert sent == "#busy, #quiet"
 
     @pytest.mark.asyncio
     async def test_exclusions_apply(self, directory):
         bot = _bot(exclude="#quiet")
         await ChannelsCommand(bot).execute(mock_message(content="channels"))
-        assert bot.command_manager.send_response.call_args.args[1] == "Common channels: #busy"
+        assert bot.command_manager.send_response.call_args.args[1] == "#busy"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_config_when_directory_has_nothing(self, monkeypatch):
@@ -186,3 +183,28 @@ async def test_channels_waits_a_second_between_parts(monkeypatch):
     bot = _bot()
     await ChannelsCommand(bot)._send_multiple_messages(mock_message(content="channels"), ["a", "b", "c"])
     assert [call.args[0] for call in sleep.call_args_list] == [1.0, 1.0]
+
+
+class TestNumberedParts:
+    def test_parts_are_numbered_with_no_header(self):
+        cmd = ChannelsCommand(_bot())
+        channels = [f"#channel-number-{i:02d}" for i in range(20)]
+        messages = cmd._split_into_messages(channels, None)
+        total = len(messages)
+        assert total > 1
+        assert messages[0].startswith(f"1/{total} #channel-number-00")
+        assert messages[1].startswith(f"2/{total} #channel-number-")
+        assert messages[-1].startswith(f"{total}/{total} #")
+        assert all(len(m) <= 130 for m in messages)
+        assert all("cont" not in m for m in messages)
+
+    def test_every_channel_kept_once(self):
+        cmd = ChannelsCommand(_bot())
+        channels = [f"#channel-number-{i:02d}" for i in range(20)]
+        joined = " ".join(cmd._split_into_messages(channels, None))
+        assert [c for c in joined.replace(",", " ").split() if c.startswith("#")] == channels
+
+    def test_single_message_has_no_number(self):
+        cmd = ChannelsCommand(_bot())
+        assert cmd._split_into_messages(["#a", "#b"], None) == ["#a, #b"]
+
