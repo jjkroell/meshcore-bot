@@ -14,6 +14,10 @@ from typing import Any, Optional
 from meshcore import EventType
 
 
+class ChannelReadError(Exception):
+    """The radio gave no trustworthy answer about a slot: it may or may not be in use."""
+
+
 class ChannelManager:
     """Manages channel operations and information with enhanced concurrent fetching"""
 
@@ -31,6 +35,8 @@ class ChannelManager:
         self._channels_cache: dict[int, dict[str, Any]] = {}
         self._cache_valid = False
         self._fetch_timeout = 2.0  # Timeout for individual channel fetches
+        self._read_attempts = 3  # Tries per slot before it counts as unread
+        self._read_retry_delay = 0.5  # Seconds between those tries
         # Delay between per-channel reads during the connect-time scan, keeping
         # the init burst gentle on the firmware. Commands are already serialized
         # globally; this adds extra spacing for the 40-slot scan specifically.
@@ -119,46 +125,44 @@ class ChannelManager:
             self.logger.warning("Device not connected, skipping channel fetch")
             return []
 
-        # Clear cache for fresh fetch
-        self._channels_cache.clear()
+        # Built separately and only used if every slot answered: a map with a slot
+        # missing routes replies wrongly, which is worse than having no map.
+        fetched: dict[int, dict[str, Any]] = {}
         valid_channels = []
         consecutive_empty = 0
-        max_consecutive_empty = 3  # Abort after 3 consecutive missing/empty channels
+        max_consecutive_empty = 3  # Abort after 3 consecutive empty channels
 
         # Fetch channels sequentially with a conservative delay between requests
         for channel_idx in range(self.max_channels):
             try:
                 result = await self._fetch_single_channel(channel_idx)
-
-                if result and result.get("channel_name"):
-                    self._channels_cache[channel_idx] = result
-                    valid_channels.append(result)
-                    consecutive_empty = 0  # Reset on success
-                    self.logger.debug(f"Found channel {channel_idx}: {result.get('channel_name')}")
-                else:
-                    # Empty or no response — channels are typically contiguous from 0
-                    consecutive_empty += 1
-                    self.logger.debug(f"Channel {channel_idx} is empty or not found ({consecutive_empty} consecutive)")
-
-                    if consecutive_empty >= max_consecutive_empty:
-                        self.logger.info(
-                            f"Stopping channel fetch after {max_consecutive_empty} consecutive "
-                            f"empty slots at index {channel_idx}"
-                        )
-                        break
-
-                # Conservative delay to avoid overwhelming the device
-                if self._fetch_interval > 0:
-                    await asyncio.sleep(self._fetch_interval)
-
             except Exception as e:
-                consecutive_empty += 1
-                self.logger.debug(f"Error fetching channel {channel_idx}: {e}")
-                if consecutive_empty >= max_consecutive_empty:
-                    self.logger.warning("Multiple consecutive errors fetching channels — aborting fetch")
-                    break
-                continue
+                self.logger.warning(f"Channel scan abandoned: slot {channel_idx}: {e}")
+                self._cache_valid = False
+                return []
 
+            if result and result.get("channel_name"):
+                fetched[channel_idx] = result
+                valid_channels.append(result)
+                consecutive_empty = 0  # Reset on success
+                self.logger.debug(f"Found channel {channel_idx}: {result.get('channel_name')}")
+            else:
+                # Empty — channels are typically contiguous from 0
+                consecutive_empty += 1
+                self.logger.debug(f"Channel {channel_idx} is empty or not found ({consecutive_empty} consecutive)")
+
+                if consecutive_empty >= max_consecutive_empty:
+                    self.logger.info(
+                        f"Stopping channel fetch after {max_consecutive_empty} consecutive "
+                        f"empty slots at index {channel_idx}"
+                    )
+                    break
+
+            # Conservative delay to avoid overwhelming the device
+            if self._fetch_interval > 0:
+                await asyncio.sleep(self._fetch_interval)
+
+        self._channels_cache = fetched
         self._cache_valid = bool(valid_channels)
         self.logger.info(f"Successfully fetched {len(valid_channels)} channels")
 
@@ -223,13 +227,40 @@ class ChannelManager:
 
     async def _fetch_single_channel(self, channel_idx: int) -> Optional[dict[str, Any]]:
         """
-        Fetch a single channel with error handling
+        Read one slot, trying again if the radio doesn't clearly answer for it.
 
         Args:
             channel_idx: The channel index to fetch
 
         Returns:
-            Channel info dictionary or None if not configured
+            Channel info dictionary, or None if the radio says the slot is empty
+
+        Raises:
+            ChannelReadError: no answer for this slot after _read_attempts tries
+        """
+        for attempt in range(1, self._read_attempts + 1):
+            answered, payload = await self._request_channel(channel_idx)
+            if answered:
+                return payload
+            if attempt < self._read_attempts:
+                await asyncio.sleep(self._read_retry_delay)
+        raise ChannelReadError(f"no answer after {self._read_attempts} tries")
+
+    async def _fetch_channel_or_none(self, channel_idx: int) -> Optional[dict[str, Any]]:
+        """_fetch_single_channel for callers where unread and empty mean the same."""
+        try:
+            return await self._fetch_single_channel(channel_idx)
+        except ChannelReadError as e:
+            self.logger.warning(f"Could not read channel {channel_idx}: {e}")
+            return None
+
+    async def _request_channel(self, channel_idx: int) -> tuple[bool, Optional[dict[str, Any]]]:
+        """
+        Ask the radio about one slot, once.
+
+        Returns:
+            (answered, payload). answered is False when the radio didn't clearly
+            answer for this slot; payload is None when it says the slot is empty.
         """
         try:
             # Use the native library API if available — avoids the CLI wrapper overhead
@@ -242,13 +273,19 @@ class ChannelManager:
                     )
                 except asyncio.TimeoutError:
                     self.logger.debug(f"Timeout waiting for channel {channel_idx} response")
-                    return None
+                    return False, None
 
                 if not hasattr(res, 'payload') or not res.payload:
                     self.logger.debug(f"No channel {channel_idx} found")
-                    return None
+                    return False, None
 
                 payload = res.payload
+                if 'error_code' in payload:  # the radio's own reply: no such slot
+                    self.logger.debug(f"Radio has no channel {channel_idx}: {payload}")
+                    return True, None
+                if 'reason' in payload or 'error' in payload:  # the library gave up waiting
+                    self.logger.debug(f"No reply for channel {channel_idx}: {payload}")
+                    return False, None
             else:
                 # Fallback: CLI wrapper (legacy path)
                 channel_event = None
@@ -275,14 +312,24 @@ class ChannelManager:
                         await asyncio.wait_for(event_received.wait(), timeout=self._fetch_timeout)
                     except asyncio.TimeoutError:
                         self.logger.debug(f"Timeout waiting for channel {channel_idx} response")
-                        return None
+                        return False, None
 
                     if not channel_event or not channel_event.payload:
                         self.logger.debug(f"No channel {channel_idx} found")
-                        return None
+                        return False, None
                     payload = channel_event.payload
                 finally:
                     self.bot.meshcore.unsubscribe(subscription)
+
+            # The library returns the next channel reply, whichever slot it is for.
+            # A slow reply lands on the following request; filing it there puts a
+            # channel in the wrong slot and the bot replies on the wrong channel.
+            reply_idx = payload.get('channel_idx', channel_idx)
+            if reply_idx != channel_idx:
+                self.logger.warning(
+                    f"Ignoring late reply for channel {reply_idx} while reading channel {channel_idx}"
+                )
+                return False, None
 
             # Store channel key as hex for decryption
             channel_secret = payload.get('channel_secret', b'')
@@ -292,16 +339,16 @@ class ChannelManager:
             # Empty channel: all-zero secret
             if isinstance(channel_secret, bytes) and channel_secret == b'\x00' * 16:
                 self.logger.debug(f"Channel {channel_idx} is empty (all-zero secret)")
-                return None
+                return True, None
 
-            return payload
+            return True, payload
 
         except asyncio.TimeoutError:
             self.logger.debug(f"Timeout fetching channel {channel_idx}")
-            return None
+            return False, None
         except Exception as e:
             self.logger.debug(f"Error fetching channel {channel_idx}: {e}")
-            return None
+            return False, None
 
     def _get_cached_channels(self) -> list[dict[str, Any]]:
         """Get channels from cache, sorted by index"""
@@ -324,7 +371,7 @@ class ChannelManager:
         if use_cache and channel_idx in self._channels_cache:
             return self._channels_cache[channel_idx]
 
-        result = await self._fetch_single_channel(channel_idx)
+        result = await self._fetch_channel_or_none(channel_idx)
 
         if result:
             self._channels_cache[channel_idx] = result
@@ -562,7 +609,7 @@ class ChannelManager:
                     channel_info = res.payload
                 else:
                     # Fallback: try to get from event subscription
-                    channel_info = await self._fetch_single_channel(channel_idx)
+                    channel_info = await self._fetch_channel_or_none(channel_idx)
                     if not channel_info:
                         self.logger.error(f"Could not retrieve channel {channel_idx} after setting")
                         return False
@@ -651,13 +698,13 @@ class ChannelManager:
                 except asyncio.TimeoutError:
                     self.logger.warning(f"Timeout waiting for channel {channel_idx} set confirmation")
                     await asyncio.sleep(0.5)
-                    result = await self._fetch_single_channel(channel_idx)
+                    result = await self._fetch_channel_or_none(channel_idx)
                     if result and result.get('channel_name') == channel_name:
                         channel_set = True
 
                 if channel_set:
                     # Update cache
-                    result = await self._fetch_single_channel(channel_idx)
+                    result = await self._fetch_channel_or_none(channel_idx)
                     if result:
                         self._channels_cache[channel_idx] = result
                         self._store_single_channel_in_db(result)
@@ -743,7 +790,7 @@ class ChannelManager:
                     self.logger.warning(f"Timeout waiting for channel {channel_idx} removal confirmation")
                     # Still try to verify by fetching the channel
                     await asyncio.sleep(0.5)
-                    result = await self._fetch_single_channel(channel_idx)
+                    result = await self._fetch_channel_or_none(channel_idx)
                     if not result or not result.get('channel_name'):
                         channel_cleared = True
 
