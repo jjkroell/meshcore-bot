@@ -774,8 +774,8 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Clock Sync Nodes</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2128;--muted:#5f6b7a;--line:#dde2e8;--accent:#1f6feb;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--chip:#eef1f5}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--card:#171c22;--ink:#e6edf3;--muted:#9aa7b4;--line:#2b333c;--accent:#4c9aff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--chip:#222a33}}
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2128;--muted:#5f6b7a;--line:#dde2e8;--accent:#1f6feb;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--chip:#eef1f5;--bot:#8250df}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--card:#171c22;--ink:#e6edf3;--muted:#9aa7b4;--line:#2b333c;--accent:#4c9aff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--chip:#222a33;--bot:#bc8cff}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:980px;margin:0 auto;padding:20px 16px 48px}
@@ -802,7 +802,7 @@ input{font:inherit;width:100%;padding:7px 9px;border:1px solid var(--line);borde
 input:focus{outline:2px solid var(--accent);outline-offset:-1px}
 label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
 .grid{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:end}
-.pw{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pw input[type=password]{flex:1;min-width:140px;margin:0}.pw label{display:flex;gap:4px;align-items:center;margin:0}
+.pw{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pwf{position:relative;flex:1;min-width:140px}.pwf input,.edit .pwf input{margin:0;padding-right:40px}.eye{position:absolute;top:0;right:0;bottom:0;width:38px;padding:0;border:0;background:none;color:var(--muted);display:flex;align-items:center;justify-content:center}.eye:hover{color:var(--ink)}.eye:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:7px}.eye svg{width:18px;height:18px}.eye .slash{display:none}.eye[aria-pressed=true] .slash{display:inline}.pw label{display:flex;gap:4px;align-items:center;margin:0}
 .sugg{border:1px solid var(--line);border-radius:7px;margin-top:6px;max-height:240px;overflow:auto;display:none}
 .sugg div{padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--line)}
 .sugg div:last-child{border-bottom:0}
@@ -857,7 +857,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
   <div><label for="nk">Public key or prefix (at least 6 hex)</label>
    <input id="nk" placeholder="e.g. 6df99f" autocomplete="off" spellcheck="false"></div>
   <div><label for="np">Admin password</label>
-   <input id="np" type="password" autocomplete="new-password" placeholder="This node's admin password"></div>
+   <div class="pwf"><input id="np" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="This node's admin password"></div></div>
   <div><button class="primary" id="add">Add</button></div>
  </div>
 </div>
@@ -880,12 +880,20 @@ function ago(ts){if(!ts)return '<span class="muted">never</span>';const h=(Date.
  const cls=h<=60?"ok":h<=24*7?"warn":"bad";return `<span class="${cls}">${t}</span>`;}
 function when(ts){const d=new Date(ts*1000),now=new Date();const hm=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",hour12:false});
  return d.toDateString()===now.toDateString()?"today "+hm:d.toLocaleDateString([],{month:"short",day:"numeric"})+" "+hm;}
-function lastBy(b){if(!b)return "";
- return `<div class="small" style="margin-top:3px">Last synced by <b class="${b.peer?"":"ok"}">${esc(b.bot)}</b> <span class="muted">· ${esc(when(b.ts))}${b.note?" · "+esc(b.note):""}</span></div>`;}
-function outcome(r,b){if(!r)return '<span class="muted">—</span>'+lastBy(b);
- const cls=/^(SUCCESS|AUTO_REBOOTED|SKIPPED_PEER)$/.test(r.outcome)?"ok":r.outcome==="ALREADY_CURRENT"?"warn":"bad";
- const label=r.outcome==="SKIPPED_PEER"?"SKIPPED":r.outcome;
- return `<span class="chip ${cls}">${esc(label)}</span>`+` <span class="small muted">${esc(r.current?r.at.slice(11,16):r.at.slice(5,16))}</span>`+(r.detail?`<div class="small muted">${esc(r.detail)}</div>`:"")+lastBy(b);}
+// Nov-04 04:06, from either the log's local time or a peer post's timestamp.
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const stamp=d=>{const p=x=>String(x).padStart(2,"0");return `${MONTHS[d.getMonth()]}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+function outcome(r,b){
+ // Whichever is newer: our last attempt, or a successful sync by a peer bot.
+ const ran=r&&new Date(r.at.replace(" ","T")),useBy=b&&(!r||(b.peer&&b.ts*1000>ran));
+ if(!r&&!b)return '<span class="muted">—</span>';
+ const res=useBy?"SUCCESS":r.outcome;
+ const cls=/^(SUCCESS|AUTO_REBOOTED|SKIPPED_PEER)$/.test(res)?"ok":res==="ALREADY_CURRENT"?"warn":"bad";
+ const label=res==="SKIPPED_PEER"?"SKIPPED":res;
+ const at=stamp(useBy?new Date(b.ts*1000):ran);
+ const fromBy=useBy||(res==="SKIPPED_PEER"&&b),who=fromBy?b.bot:data.me;
+ const line=(fromBy?b.note||"":r.detail||"").replace(/ \((ahead|behind)\)/,"").replace(/\s*\(?contact re-added\)?/,"");
+ return `<span class="chip ${cls}">${esc(label)}</span> <span class="small muted">${esc(at)}</span><div class="small"><b style="color:var(--${who===data.me?"bot":"accent"})">${esc(who)}</b>${line?` <span class="muted">${esc(line)}</span>`:""}</div>`;}
 async function load(){
  const r=await fetch("/api/nodes",{cache:"no-store"});const j=await r.json();
  if(!r.ok){msg(j.error,"err");return;}
@@ -897,19 +905,33 @@ async function load(){
  if(j.channel){$("#chan").style.display="";$("#chanh").textContent=j.channel;
   $("#chanp").textContent=j.peers.length?"Peer bot"+(j.peers.length>1?"s":"")+": "+j.peers.join(", ")+" — their OK / SUCCESS posts count for the skip":"No peer bots configured";
   const pn=new Set(j.peers.map(p=>p.toLowerCase().replace(/[^0-9a-z]/g,"")));
-  $("#chanl").innerHTML=j.channel_msgs.length?j.channel_msgs.map(m=>`<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">${esc(when(m.ts))}</span> <b class="${pn.has(m.sender.toLowerCase().replace(/[^0-9a-z]/g,""))?"ok":""}">${esc(m.sender)}</b>: <code>${esc(m.text)}</code></div>`).join("")+'<div class="muted" style="padding-top:6px">Our own posts don\'t show here — the bot is offline while it sends them.</div>':'<span class="muted">Nothing heard on this channel yet.</span>';}
+  $("#chanl").innerHTML=j.channel_msgs.length?j.channel_msgs.map(m=>`<div style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="muted">${esc(when(m.ts))}</span> <b style="${pn.has(m.sender.toLowerCase().replace(/[^0-9a-z]/g,""))?"color:var(--accent)":""}">${esc(m.sender)}</b>: <code>${esc(m.text)}</code></div>`).join("")+'<div class="muted" style="padding-top:6px">Our own posts don\'t show here — the bot is offline while it sends them.</div>':'<span class="muted">Nothing heard on this channel yet.</span>';}
  render();}
-function render(){
- $("#rows").innerHTML=data.nodes.map((n,i)=>editing===i?`
- <tr class="edit"><td><input id="en" value="${esc(n.name)}"></td><td><input id="ek" value="${esc(n.pubkey)}" spellcheck="false"></td>
+const EYE=`<button type="button" class="eye" aria-pressed="false" aria-label="Show password" title="Show password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg></button>`;
+function showPw(input,show){input.type=show?"text":"password";const b=input.parentNode.querySelector(".eye"),t=show?"Hide password":"Show password";
+ b.setAttribute("aria-pressed",show);b.setAttribute("aria-label",t);b.title=t;}
+document.addEventListener("click",e=>{const b=e.target.closest(".eye");if(!b)return;const i=b.parentNode.querySelector("input");showPw(i,i.type==="password");i.focus();});
+$("#np").insertAdjacentHTML("afterend",EYE);
+const rowKey=n=>`${n.id}|${n.name}|${n.pubkey}`;
+const row=(n,i)=>editing===i?`
+ <tr class="edit" data-k="${esc(rowKey(n))}"><td><input id="en" value="${esc(n.name)}"></td><td><input id="ek" value="${esc(n.pubkey)}" spellcheck="false"></td>
  <td colspan="2"><label for="ep">Admin password</label><div class="pw">
-  <input id="ep" type="password" autocomplete="new-password" placeholder="${n.has_password?"Set — type to replace":"None set — type one"}"></div>
+  <div class="pwf"><input id="ep" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" placeholder="${n.has_password?"Set — type to replace":"None set — type one"}">${EYE}</div></div>
   ${n.hidden.length?`<div class="small muted">Kept as is: ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td class="actions"><button class="primary" onclick="saveEdit(${i})">Save</button> <button onclick="editing=null;render()">Cancel</button></td></tr>`:`
  <tr><td><b>${esc(n.name)}</b>${n.has_password?"":' <span class="chip bad" title="No admin password set: the clock sync skips this node. Edit it to set one.">no password</span>'}${n.hidden.length?`<div class="small muted">+ ${n.hidden.map(esc).join(", ")}</div>`:""}</td>
  <td><code title="${esc(n.pubkey)}">${esc(n.pubkey.length>16?n.pubkey.slice(0,16)+"…":n.pubkey)}</code></td>
  <td>${ago(n.last_success)}</td><td>${outcome(n.last_run,n.last_by)}</td>
- <td class="actions"><button class="runone" onclick="runNow([data.nodes[${i}].name])" ${busy()?"disabled":""}>Run</button> <button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`).join("");
+ <td class="actions"><button class="runone" onclick="runNow([data.nodes[${i}].name])" ${busy()?"disabled":""}>Run</button> <button onclick="editing=${i};render()">Edit</button> <button class="danger" onclick="removeNode(${i})">Remove</button></td></tr>`;
+function render(){
+ // A refresh mustn't touch an open Edit row: it holds what's being typed. Rebuild
+ // the rows around it, unless the node it was opened on has changed.
+ const box=$("#rows"),open=box.querySelector("tr.edit"),n=data.nodes[editing];
+ if(open&&n&&open.dataset.k===rowKey(n)){
+  [...box.children].forEach(r=>{if(r!==open)r.remove();});
+  open.insertAdjacentHTML("beforebegin",data.nodes.slice(0,editing).map(row).join(""));
+  open.insertAdjacentHTML("afterend",data.nodes.slice(editing+1).map((m,k)=>row(m,editing+1+k)).join(""));
+ }else box.innerHTML=data.nodes.map(row).join("");
  $("#runall").disabled=busy();$("#runall").textContent=data.requested?"Starting…":data.running?"Running…":"Run all now";
  clearTimeout(poll);if(busy())poll=setTimeout(()=>load().catch(()=>{}),10000);}
 let poll=null;
@@ -952,7 +974,7 @@ async function removeNode(i){const n=data.nodes[i];if(!confirm(`Remove ${n.name}
  const ns=current();ns.splice(i,1);await save(ns,`Removed ${n.name}.`);}
 $("#add").onclick=async()=>{const name=$("#nn").value.trim(),pubkey=$("#nk").value.trim(),password=$("#np").value;
  if(!name||!pubkey||!password){msg("Enter a name, a public key and the node's admin password.","err");return;}
- if(await save([...current(),{id:null,name,pubkey,password}],`Added ${name}.`)){$("#nn").value="";$("#nk").value="";$("#np").value="";$("#q").value="";}};
+ if(await save([...current(),{id:null,name,pubkey,password}],`Added ${name}.`)){$("#nn").value="";$("#nk").value="";$("#np").value="";showPw($("#np"),false);$("#q").value="";}};
 let t=null;
 $("#q").oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{const q=$("#q").value.trim();const s=$("#sugg");
  if(q.length<2){s.style.display="none";return;}
