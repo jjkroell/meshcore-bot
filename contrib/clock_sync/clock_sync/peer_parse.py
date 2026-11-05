@@ -5,7 +5,8 @@ Shared by clock_sync.py (skip a node a peer synced recently) and the web page
 
 Two formats are understood:
 
-  key format (agreed, preferred):   `<name> [<key or 3-byte prefix>]: SUCCESS` or `: OK`
+  key format (preferred):   `<name> [<key or 3-byte prefix>]: SUCCESS` or `: OK`,
+      or key first, as our own posts are: `[<key>] <name>: SUCCESS`
       one or more per message; each key's outcome is the text after it, up to
       the next key (a lone key: anywhere in the message). Exact.
 

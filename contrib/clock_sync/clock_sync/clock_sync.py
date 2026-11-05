@@ -262,15 +262,16 @@ def load_peer_successes(bot_db: str, channel: str, peers: list[str], since_ts: f
 
 
 def format_post(label: str, key: str, outcome: str, detail: str = "") -> str:
-    """Our #time-sync line, in the shared format both bots parse:
-    `<name> [<first 3 bytes of the key, 6 hex>]: <OUTCOME>[ - detail]`, kept under
-    CHAN_MSG_MAX_BYTES by trimming the detail, then the name - never the key."""
-    key = (key or "")[:6]
-    tail = f" [{key}]: {outcome}" if key else f": {outcome}"
+    """Our #time-sync line: `[<first 3 bytes of the key, 6 hex>] <name>: <OUTCOME>[ - detail]`,
+    kept under CHAN_MSG_MAX_BYTES by trimming the detail, then the name - never the key.
+    The bracket comes first so a line can never open with a node's name: a command
+    bot listening on the channel took `Mt Benson Top S ...` for its `mt` command."""
+    head = f"[{(key or '')[:6] or '?'}] "
+    tail = f": {outcome}"
     name = label
-    while name and len((name + tail).encode()) > CHAN_MSG_MAX_BYTES:
+    while name and len((head + name + tail).encode()) > CHAN_MSG_MAX_BYTES:
         name = name[:-1]
-    msg = (name.rstrip() or "?") + tail
+    msg = head + (name.rstrip() or "?") + tail
     if detail:
         extra = f" {detail}" if detail.startswith("(") else f" - {detail}"
         room = CHAN_MSG_MAX_BYTES - len(msg.encode())
@@ -776,7 +777,7 @@ async def run(cfg: dict) -> list[SyncResult]:
                     contact = find_contact(mc, node_cfg)
                     key = (contact["public_key"] if contact else str(node_cfg.get("pubkey_prefix") or "")).lower()
                     detail = result.detail if result.outcome in (Outcome.ALREADY_CURRENT, Outcome.AUTO_REBOOTED) else ""
-                    if result.offset is not None:  # `Name [key]: SUCCESS (5s off)`, as PMD-TimeSync does
+                    if result.offset is not None:  # `[key] Name: SUCCESS (5s off)`
                         detail = f"({peer_parse.fmt_offset(result.offset)})" + (f" {detail.split(' - ', 1)[-1]}" if detail else "")
                     await post(format_post(result.node, key, result.outcome, detail))
 

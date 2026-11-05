@@ -21,7 +21,7 @@ reboots; this keeps them right.
 
 Each result is posted to `summary_channel` as
 
-    Name [ecf7f5]: SUCCESS (5s off)
+    [ecf7f5] Name: SUCCESS (5s off)
 
 (first 3 bytes of the repeater's key), between a start and a finish line:
 
