@@ -1,9 +1,11 @@
 """Tests for modules.commands.cmd_command."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from modules.commands.alert_command import AlertCommand
-from modules.commands.cmd_command import CmdCommand
+from modules.commands.cmd_command import DISPLAY_NAMES, CmdCommand
 from modules.commands.ping_command import PingCommand
 from modules.commands.sports_command import SportsCommand
 from modules.commands.trace_command import TraceCommand
@@ -204,3 +206,90 @@ class TestCmdCommand:
         assert result.startswith("Avail cmds: ")
         # Should NOT contain doubled numbers like "(5 5 more)"
         assert not re.search(r'\(\d+ \d+ more\)', result)
+
+
+class _FakeCommand:
+    """Just enough of a command for the cmd listing."""
+
+    def __init__(self, name, requires_dm=False, admin=False):
+        self.name = name
+        self.keywords = [name]
+        self.requires_dm = requires_dm
+        self.admin = admin
+
+    def _derive_config_section_name(self):
+        return f"{self.name.title()}_Command"
+
+    def get_config_value(self, section, key, fallback=None, value_type='str'):
+        return fallback
+
+    def is_channel_allowed(self, message):
+        return True
+
+    def requires_admin_access(self):
+        return self.admin
+
+    def _check_admin_access(self, message):
+        return message.sender_id == "Boss"
+
+
+def _cmd_with(bot, *commands):
+    bot.command_manager.keywords = {}
+    bot.command_manager._is_channel_trigger_allowed = lambda name, message: True
+    bot.command_manager.commands = {c.name: c for c in commands}
+    bot.command_manager.send_response_chunked = AsyncMock(return_value=True)
+    return CmdCommand(bot)
+
+
+class TestCmdFullList:
+    """cmd lists every usable command, over as many messages as it takes."""
+
+    def test_uses_the_words_people_type(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot, *[_FakeCommand(n) for n in ("catfact", "dogfact", "hacker", "ferry")])
+        names = cmd._get_command_names(mock_message(content="cmd"))
+        assert sorted(names) == ["ferries", "meow", "sudo", "woof"]
+
+    def test_display_names_are_real_triggers(self):
+        from modules.commands.announcements_command import AnnouncementsCommand
+        from modules.commands.catfact_command import CatfactCommand
+        from modules.commands.dogfact_command import DogfactCommand
+        from modules.commands.ferry_command import FerryCommand
+        from modules.commands.hacker_command import HackerCommand
+        for cls in (AnnouncementsCommand, CatfactCommand, DogfactCommand, FerryCommand, HackerCommand):
+            assert DISPLAY_NAMES[cls.name] in cls.keywords
+
+    def test_dm_only_commands_shown_in_dm_not_channel(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot, _FakeCommand("ping"), _FakeCommand("advert", requires_dm=True))
+        assert cmd._get_command_names(mock_message(content="cmd")) == ["ping"]
+        assert "advert" in cmd._get_command_names(mock_message(content="cmd", is_dm=True))
+
+    def test_admin_commands_only_shown_to_admins(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot, _FakeCommand("ping"), _FakeCommand("reload", admin=True))
+        assert "reload" not in cmd._get_command_names(mock_message(content="cmd", is_dm=True))
+        assert "reload" in cmd._get_command_names(mock_message(content="cmd", is_dm=True, sender_id="Boss"))
+
+    def test_chunks_hold_every_name_within_limit(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot)
+        names = [f"command{i:02d}" for i in range(40)]
+        chunks = cmd._chunk_commands(names, 100)
+        assert len(chunks) > 1
+        assert all(len(c.encode("utf-8")) <= 100 for c in chunks)
+        joined = " ".join(chunks).removeprefix("Avail cmds: ")
+        assert [n.strip() for n in joined.replace(",", " ").split()] == names
+
+    def test_short_list_is_one_message(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot)
+        assert cmd._chunk_commands(["ping", "wx"], 100) == ["Avail cmds: ping, wx"]
+
+    @pytest.mark.asyncio
+    async def test_long_list_goes_out_chunked_and_addressed(self, command_mock_bot):
+        cmd = _cmd_with(command_mock_bot, *[_FakeCommand(f"command{i:02d}") for i in range(40)])
+        assert await cmd.execute(mock_message(content="cmd")) is True
+        command_mock_bot.command_manager.send_response.assert_not_called()
+        sent = command_mock_bot.command_manager.send_response_chunked.call_args
+        chunks = sent.args[1]
+        assert len(chunks) > 1
+        assert chunks[0].startswith("@[TestUser]\nAvail cmds: ")
+        assert not chunks[1].startswith("@[")
+        assert sent.kwargs["skip_user_rate_limit_first"] is False
+        assert "command39" in chunks[-1]

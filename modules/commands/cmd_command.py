@@ -10,6 +10,16 @@ from ..models import MeshMessage
 from .base_command import BaseCommand
 
 
+# Commands whose plugin name isn't what people type (or isn't a trigger at all).
+DISPLAY_NAMES = {
+    'announcements': 'announce',
+    'catfact': 'meow',
+    'dogfact': 'woof',
+    'ferry': 'ferries',
+    'hacker': 'sudo',
+}
+
+
 class CmdCommand(BaseCommand):
     """Handles the cmd command"""
 
@@ -69,25 +79,35 @@ class CmdCommand(BaseCommand):
                 return False
         return True
 
-    def _get_commands_list(self, message: Optional[MeshMessage] = None, max_length: Optional[int] = None) -> str:
-        """Get a compact list of available commands, prioritizing important ones.
+    def _is_usable_by_sender(self, cmd_instance: Any, message: Optional[MeshMessage]) -> bool:
+        """Return False for commands this sender would only get refused by."""
+        if message is None:
+            return True
+        if getattr(cmd_instance, 'requires_dm', False) is True and not message.is_dm:
+            return False
+        requires_admin = getattr(cmd_instance, 'requires_admin_access', None)
+        if callable(requires_admin) and requires_admin() is True:
+            return cmd_instance._check_admin_access(message) is True
+        return True
 
-        When message is provided, only includes commands that can execute in this
-        channel (respects per-command channel overrides and channel_keywords).
+    def _get_command_names(self, message: Optional[MeshMessage] = None) -> list[str]:
+        """Get the names to show for every available command, most important first.
+
+        When message is provided, only includes commands this sender can use here
+        (respects per-command channel overrides, channel_keywords, DM-only and
+        admin-only commands).
 
         Args:
-            message: Optional message for context filtering. When provided, only
-                commands valid for this channel are included.
-            max_length: Maximum length for the command list (None = no limit).
+            message: Optional message for context filtering.
 
         Returns:
-            str: Comma-separated list of commands, truncated if necessary.
+            list[str]: Names as a user would type them.
         """
         # Define priority order - most important/commonly used commands first
         priority_commands = [
             'test', 'ping', 'help', 'hello', 'cmd', 'advert',
             'wx', 'aqi', 'sun', 'moon', 'solar', 'hfcond', 'satpass',
-            'prefix', 'path', 'sports', 'dice', 'roll', 'stats'
+            'prefix', 'path', 'sports', 'dice', 'roll', 'stats', 'channels', 'bots'
         ]
 
         # Get all command names (only those available in this context)
@@ -102,7 +122,9 @@ class CmdCommand(BaseCommand):
                     continue
                 if not self._is_command_valid_for_channel(cmd_name, cmd_instance, message):
                     continue
-                all_commands.append(cmd_name)
+                if not self._is_usable_by_sender(cmd_instance, message):
+                    continue
+                all_commands.append(DISPLAY_NAMES.get(cmd_name, cmd_name))
 
         # Include config keywords that aren't handled by plugins (and are allowed in channel)
         for keyword in self.bot.command_manager.keywords:
@@ -134,7 +156,35 @@ class CmdCommand(BaseCommand):
         prioritized = sorted(prioritized, key=lambda x: priority_commands.index(x) if x in priority_commands else 999)
 
         # Combine: priority first, then others
-        command_names = prioritized + sorted(remaining)
+        return prioritized + sorted(remaining)
+
+    def _chunk_commands(self, command_names: list[str], max_length: int) -> list[str]:
+        """Split the full command list into messages of at most max_length bytes."""
+        chunks: list[str] = []
+        line = "Avail cmds: "
+        empty = True
+        for name in command_names:
+            addition = name if empty else f", {name}"
+            if not empty and len((line + addition + ",").encode('utf-8')) > max_length:
+                chunks.append(line + ",")
+                line, addition = "", name
+            line += addition
+            empty = False
+        chunks.append(line)
+        return chunks
+
+    def _get_commands_list(self, message: Optional[MeshMessage] = None, max_length: Optional[int] = None) -> str:
+        """Get a compact list of available commands, prioritizing important ones.
+
+        Args:
+            message: Optional message for context filtering. When provided, only
+                commands this sender can use here are included.
+            max_length: Maximum length for the command list (None = no limit).
+
+        Returns:
+            str: Comma-separated list of commands, truncated if necessary.
+        """
+        command_names = self._get_command_names(message)
 
         # Build the list, respecting max_length if provided
         if max_length is None:
@@ -191,13 +241,14 @@ class CmdCommand(BaseCommand):
             # Fallback to dynamic command list if no custom keyword is defined
             # Get max message length to ensure we fit within limits
             max_length = self.get_max_message_length(message)
-            # _get_commands_list handles the prefix internally; pass message for context filtering
-            response = self._get_commands_list(message=message, max_length=max_length)
+            chunks = self._chunk_commands(self._get_command_names(message), max_length)
             if not message.is_dm and message.sender_id:
                 # Address it ourselves with the list on its own line; same bytes as
                 # the "@[name] " send_channel_message would otherwise add.
-                response = f"@[{message.sender_id}]\n{response}"
-            return await self.send_response(message, response)
+                chunks[0] = f"@[{message.sender_id}]\n{chunks[0]}"
+            if len(chunks) == 1:
+                return await self.send_response(message, chunks[0])
+            return await self.send_response_chunked(message, chunks, skip_user_rate_limit_first=False)
         except Exception as e:
             self.logger.error(f"Error executing cmd command: {e}")
             error_msg = self.translate('errors.execution_error', command='cmd', error=str(e))
