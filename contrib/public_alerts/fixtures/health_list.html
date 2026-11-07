@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en" data-wf-page="5c477d7234329c8ae83693a0" data-wf-site="5c477d7234329c39c036939f">
+<head>
+	<meta charset="utf-8">
+	<title>Public Notices | Island Health | My Health Department</title>
+	<meta content="width=device-width, initial-scale=1" name="viewport">
+	<meta content="Webflow" name="generator">
+	<!-- Sentry Integration -->
+	<script
+		src="https://d1x0oaju7ljwc0.cloudfront.net/sentry/bundle.tracing.replay.feedback.min.js"
+		integrity="sha384-Yy2UXIFrWRfe56w1BuJ8/pgltHwWyYP4Q7dYKueJ/c6RG8B/bPJmGv+TBTQSuTSv"
+		crossorigin="anonymous"
+	></script>
+	<script src="/js/sentry.js"></script>
+	<!-- include Flatpickr JS and CSS for datepicker-->
+	<link href="css/vendor/flatpickr/flatpickr.css" rel="stylesheet" type="text/css">
+	<script src="js/vendor/flatpickr/flatpickr.js" type="text/javascript"></script>
+	<link href="css/myhd-full.min.css" rel="stylesheet" type="text/css">
+	<script src="https://use.typekit.net/ksy3qdn.js" type="text/javascript"></script>
+	<script type="text/javascript">try{Typekit.load();}catch(e){}</script>
+	<script type="text/javascript">!function(o,c){var n=c.documentElement,t=" w-mod-";n.className+=t+"js",("ontouchstart"in o||o.DocumentTouch&&c instanceof DocumentTouch)&&(n.className+=t+"touch")}(window,document);</script>
+	<link href="/favicon.ico" rel="shortcut icon" type="image/x-icon">
+	<link href="images/MHD_Logo_Mobile.png" rel="apple-touch-icon">  
+	<script src="https://d1tdp7z6w94jbb.cloudfront.net/js/jquery-3.3.1.min.js" type="text/javascript" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+	<script src="js/myhd-full.min.js" type="text/javascript"></script>
+	<!-- [if lte IE 9]><script src="https://cdnjs.cloudflare.com/ajax/libs/placeholders/3.0.2/placeholders.min.js"></script><![endif] -->
+</head>
+<body class="body">
+	<script>
+		function scrollToAnchor(anchor) {
+		  const element = document.getElementById(anchor);
+		  let tabindex;
+		  if (element.hasAttribute("tabindex")) {
+			tabindex = element.getAttribute('tabindex');
+		  }
+		  // make sure the element is focusable
+		  element.setAttribute("tabindex", "0");
+		  element.scrollIntoView();
+		  element.focus();
+		  // reset tabindex to what it was previously
+		  if (tabindex === undefined) {
+			element.removeAttribute('tabindex');
+		  }
+		  else {
+			element.setAttribute("tabindex", tabindex);
+		  }
+		}
+	  </script>
+	  <button class="sr-only sr-only-focusable skip-to-main-link" role="button" onclick="scrollToAnchor('page-content')">Skip to main content</button>
+	<div id="browser-check-message" style="
+	    width: 100%;
+	    height: 50px;
+	    color: #EFEFEF;
+	    margin: auto;
+	    margin-top: -50px;
+	    padding: 5px;
+	    background-color: #478eff;
+		 display: none;
+	">
+		It appears you are using an out of date browser.
+		This site is best used with the following browsers:
+		<a href="https://www.microsoft.com/en-us/windows/microsoft-edge" target="_blank">Microsoft Edge <span class="sr-only">(opens in a new tab)</span></a>
+		|
+		<a href="https://www.google.com/chrome/" target="_blank">Google Chrome <span class="sr-only">(opens in a new tab)</span></a>
+		|
+		<a href="https://www.mozilla.org/en-US/firefox/new/" target="_blank">Firefox <span class="sr-only">(opens in a new tab)</span></a>
+	</div>
+
+	<script>
+		(function(){
+			var ua = window.navigator.userAgent;
+			var msie = ua.indexOf("MSIE ");
+
+			if(msie !== -1){
+				document.getElementById('browser-check-message').style.display = 'block';
+			}
+		})();
+	</script>
+	
+	
+      <nav aria-label="Main" data-collapse="medium" data-animation="default" data-duration="400" class="navbar w-nav">
+        <div class="w-container">
+          <div class="w-nav-logo"><img src="https://my-health-department-static.s3.amazonaws.com/images/viha_logo.png" alt="Island Health" title="Island Health"></div>
+          <div class="w-nav-container">
+            <nav role="navigation" class="w-nav-menu" id="nav-menu" style="min-height: 100px;">
+              <a href="/island-health" class="w-nav-link">Home</a>
+            <div data-delay="0" class="w-nav-link w-dropdown">
+              <div class="w-dropdown-toggle">
+                <div class="w-icon-dropdown-toggle"></div>
+                <div>Food</div>
+              </div>
+              <nav class="w-dropdown-list"><a href="/island-health/program-food" class="w-dropdown-link">Food Inspections</a><a href="/island-health/food-premises-closures" class="w-dropdown-link">Closure Orders</a>
+              </nav>
+            </div>
+            
+            <div data-delay="0" class="w-nav-link w-dropdown">
+              <div class="w-dropdown-toggle">
+                <div class="w-icon-dropdown-toggle"></div>
+                <div>Water</div>
+              </div>
+              <nav class="w-dropdown-list"><a href="/island-health/beach-advisory" class="w-dropdown-link">Beach Advisories</a><a href="/island-health/public-notices" class="w-dropdown-link">Current Drinking Water Notices</a><a href="/island-health/program-drinking-water" class="w-dropdown-link">Drinking Water Inspection Reports</a><a href="/island-health/program-drinking-water-sample" class="w-dropdown-link">Drinking Water Results</a><a href="/island-health/program-rec-water" class="w-dropdown-link">Recreational Water Inspection Reports</a><a href="/island-health/program-rec-water-sample" class="w-dropdown-link">Recreational Water Results</a>
+              </nav>
+            </div>
+            
+            <div data-delay="0" class="w-nav-link w-dropdown">
+              <div class="w-dropdown-toggle">
+                <div class="w-icon-dropdown-toggle"></div>
+                <div>Community Care</div>
+              </div>
+              <nav class="w-dropdown-list"><a href="/island-health/program-ccfl" class="w-dropdown-link">Community Care Inspection</a><a href="/island-health/program-op-contravention" class="w-dropdown-link">Operating Without Licence</a>
+              </nav>
+            </div>
+            <a href="/island-health/program-personal-service" class="w-nav-link">Personal Service</a><a href="/island-health/program-outbreak" class="w-nav-link">Outbreak</a><a href="/island-health/hazard-rating" class="w-nav-link">Hazard Rating</a><a href="/island-health/public-notices" class="w-nav-link" style="font-weight: bold;">Public Notices</a>
+            </nav>
+          </div>
+          <button type="button"
+            class="w-nav-button"
+            aria-label="Navigation Drop Down Menu"
+            aria-expanded="false"
+            aria-controls="nav-menu"
+            onclick="this.setAttribute('aria-expanded', this.getAttribute('aria-expanded') === 'false')"
+          >
+            <div class="w-icon-nav-menu"></div>
+          </button>
+        </div>
+      </nav>
+      
+	<main id="page-content" class="clearfix">
+		<input type="hidden" id="target_jurisdictionName" value="" />
+		
+        <div class="jurisdiction-section">
+          <div class="w-row">
+          <div class="column-42 w-col w-col-12">
+            <div>
+              <strong class="jurisdiction-section-name">
+                Island Health
+              <br>
+              </strong>
+              1952 Bay Street Victoria, B.C. V8R 1J8 | <a href="https://www.islandhealth.ca/" target="_blank">Visit Official Website <span class="sr-only">(opens in a new tab)</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+        
+	<article id="public-notices"> 
+ <div class="section---establishment-list">
+ <div class="w-row">
+ <h1>Current Drinking Water Notices</h1>
+ </div>
+ <div class="w-row"> 
+ <p>
+ <strong>Important Information About Boil Water Notices</strong>
+ </p>
+ <p>
+ Here you can find boil water notices and other advisories currently in place within VIHA. When a notice is no longer in effect, it is removed from the list. Boil Water Notices may be subject to change on short notice. Updated information is posted to this site as often as possible, taking into account such factors, amongst others, as how late in the business week or prior to holidays the information is obtained. The most current information on the status of a Boil Water Notice can be obtained from the operator of the water system.
+ </p>
+ <p>
+ <b>
+ <u>
+ Always check with your local water supplier for the most up to date information.
+ </u>
+ </b>
+ </p>
+ </div>
+ <div class="w-row" style="border:red;border-style:solid;border-width:1px;padding:0rem .75rem">
+ <div>
+ <h3>Important Notes</h3>
+ </div>
+ <div style="color:red;">
+ <ul>
+ <li>Boil water notices on First Nations land are not included on this page. A list is available from <a href="https://www.fnha.ca/what-we-do/environmental-health/drinking-water-advisories" target="_top">Health Canada</a>.</li>
+ <li>Some small water systems have been under a boil notice for years. This means they have not been able to ensure the water they provide is safe to consume without first boiling it.</li>
+ </ul>
+ </div>
+ </div>
+ <br>
+ <div class="w-row" style=" border:black;border-style:solid;border-width:1px;padding:0rem .75rem">
+ <div>
+ <h3>Types of Advisories</h3>
+ </div>
+ <div>
+ <h5>Boil Water Notice (BWN):</h5>
+ <p>Used to advise public that there is a significant public health threat to their water supply and that they should boil (rolling boil for 1 minute) their drinking water prior to consumption in order to eliminate any disease causing microorganisms that are suspected or confirmed to be in the water supply. Examples could include: Total Coliforms, E. coli, Turbidity Events, Flooding or Treatment Failure.</p>
+ <h5>Water Quality Advisory (WQA):</h5>
+ <p>Used to advise the public that there is some level of risk associated with consuming the drinking water supply, however a boil water notice is not needed at this time. The risk could be elevated for some individuals of the general population with weakened immune systems or existing medical conditions. Examples could include: Turbidity, Sodium Content.</p>
+ <h5>Do Not Consume (DNC):</h5>
+ <p>Used to advise public that there is a significant public health threat to consuming the water supply that cannot be removed by boiling the water. The water supply is safe to use for general household sanitation or irrigation. Examples could include: Chemical contamination.</p>
+ <h5>Do Not Use (DNU):</h5>
+ <p>Used to advise the public that there could be a significant public health threat to using the water supply for any purposes at all. The water supply cannot be made safe by boiling it and the water is not safe for any use including general household sanitation or irrigation. Examples could include: Chemical contamination or large environmental spill that could cause a health hazard.</p>
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <b><p>For more information about what to do during a boil water notice, visit</p></b>
+ <a href="https://www.islandhealth.ca/learn-about-health/drinking-water/what-do-during-boil-water-notice" target="_top">https://www.islandhealth.ca/learn-about-health/drinking-water/what-do-during-boil-water-notice</a><br>
+ </div>
+ </div>
+
+ <div class="section---establishment-list"> 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h1>Facility Name</h1>
+ </div>
+ <div class="w-col w-col-4">
+ <h1>Location</h1>
+ </div>
+ <div class="w-col w-col-2">
+ <h1>Start Date</h1>
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=6DE77975-CD01-4205-941F-A0A88E0F1296" class="hyperlink1">140 Lee Road </a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 12/09/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=52E61B20-70B7-4993-AB7C-E2EC3913F21B" class="hyperlink1">1663 Millstream Road</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Victoria (City)
+ </div>
+ <div class="w-col w-col-2">
+ 11/08/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=FD418443-7172-416D-953E-86729A89DFCE" class="hyperlink1">1785 Alberni Highway WWS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 01/15/2016
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=BB11D26A-B7E1-41F9-8E86-2513ACB1FD93" class="hyperlink1">2920 Renfrew Road Water</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Mill Bay/Malahat
+ </div>
+ <div class="w-col w-col-2">
+ 03/18/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=8BA9EE35-B7F0-4DB5-89D6-C8C0AA04F55F" class="hyperlink1">423 Whaletown Road</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 09/13/2021
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=38B822DD-65BC-4B6E-A0E9-A6CA4E6400B2" class="hyperlink1">4245 Macaulay Road Water </a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Comox (Town)
+ </div>
+ <div class="w-col w-col-2">
+ 07/08/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=4F43A838-EFCC-44C5-8E4F-8C9D37325908" class="hyperlink1">850/860 Island Hwy East WS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Parksville (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/23/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=BEFE1FA3-40D3-4894-8A27-E53FD9352960" class="hyperlink1">884 Island Hwy East WS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Parksville (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/23/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=FF3F40CB-007C-4983-A5BE-31E738F73386" class="hyperlink1">892 Island Hwy East WS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Parksville (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/23/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=DAE4CBEA-6B82-428F-BE23-1D4698120185" class="hyperlink1">April Point Developments South End Water</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Strathcona Regional District
+ </div>
+ <div class="w-col w-col-2">
+ 06/09/2017
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=83AE6C34-45AE-4378-A197-660247A11CC3" class="hyperlink1">B.C. Ferries Quathiaski Cove Ferry Terminal Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 10/09/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=7DDEA296-C61E-42B8-B5D8-ACA761AFC133" class="hyperlink1">Bates Beach Boathouse</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 07/28/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=E7FD5C7D-DAA3-44AA-B9D5-4A8AECBC3E32" class="hyperlink1">Bayview Village Lakeside Strata No. 4663</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Lake Cowichan (Town)
+ </div>
+ <div class="w-col w-col-2">
+ 02/14/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=271D23FB-A777-464D-807F-4E5BBECBF9DF" class="hyperlink1">Beulah Creek Housing Water Supply </a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 10/09/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=01B2CBFA-DD21-42CC-9EDD-3801704CE70F" class="hyperlink1">Bings Creek Operations Centre</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Duncan (City)
+ </div>
+ <div class="w-col w-col-2">
+ 12/20/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=7944CEBD-58A9-4FB7-A792-BD07CFF42D8A" class="hyperlink1">Brown's Bay Resort Holdings Waterworks</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 08/17/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=7434E2C7-41CF-440F-B094-5E890BCDE77B" class="hyperlink1">Camp Lake Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 06/07/2010
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=D7BD084E-F176-49B7-9A47-1969B76A27BF" class="hyperlink1">Carnsville</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Parksville (City)
+ </div>
+ <div class="w-col w-col-2">
+ 08/14/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=141B5FFE-208C-48BE-90BC-84E67AB917FD" class="hyperlink1">Cedar Lane Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 07/12/2021
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=DF76F8FC-9B99-4937-B20A-18D348A44C92" class="hyperlink1">Cedar View Trailer Park</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 08/13/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=86F3AF48-1EFF-43FB-AA9B-1EEE33084868" class="hyperlink1">Clear as Glass Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Mill Bay/Malahat
+ </div>
+ <div class="w-col w-col-2">
+ 12/05/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=A9D2AC24-CBA6-48DA-901E-8143A6B509B8" class="hyperlink1">Coastal Black Water</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/03/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=0319BD0B-ACEE-4D25-8567-2AA19982D9D3" class="hyperlink1">Cowichan River Provincial Park</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Duncan (City)
+ </div>
+ <div class="w-col w-col-2">
+ 04/18/2019
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=CF4016A1-B455-4768-BA1E-C84ECDB6E465" class="hyperlink1">Currie Park Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Duncan (City)
+ </div>
+ <div class="w-col w-col-2">
+ 05/08/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=E6A6E375-5409-4B3B-8DF7-B3F772F5BB6C" class="hyperlink1">Dockside At Sproat Lake</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 12/04/2023
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=3B2017A0-838D-4E1E-87AE-0FFAFE1A0CC1" class="hyperlink1">Edgewood Estates</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Pender Island
+ </div>
+ <div class="w-col w-col-2">
+ 09/06/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=49D12DE2-4B54-4E6A-8BBC-FBFAA85675F6" class="hyperlink1">Errington 1350</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Parksville (City)
+ </div>
+ <div class="w-col w-col-2">
+ 09/09/2022
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=F6DBD992-B1AA-425B-9004-F9B88CC11FEF" class="hyperlink1">False Bay Provisions WS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 09/10/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=19DD097A-BF78-4B7C-8A21-8F7BC1639063" class="hyperlink1">Fish & Duck Pub Water</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 09/01/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=A7FC554F-D5A5-4D9D-9084-B544FC4E7332" class="hyperlink1">Forbes Landing Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 02/15/2008
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=8672035D-63A8-43B3-987C-BAA8735D4645" class="hyperlink1">Gabriola Professional Centre</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Nanaimo (City)
+ </div>
+ <div class="w-col w-col-2">
+ 09/08/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=2FF31449-9026-46F5-A29B-5BA6A05C17B5" class="hyperlink1">Galaxy Way Park WWS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 02/11/2022
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=4A52574A-8F81-4240-A214-491D8A8EC4B5" class="hyperlink1">Haggard Cove W. Utilities</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 11/16/2023
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=A5B2936F-8D19-4261-B973-66DAB6DF53A0" class="hyperlink1">H'Kusam R.V. Park</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Sayward (Village)
+ </div>
+ <div class="w-col w-col-2">
+ 07/17/2018
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=3E1C764F-44E8-4953-8EAA-75D8AB9498E8" class="hyperlink1">Hope Bay Bible Camp</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Pender Island
+ </div>
+ <div class="w-col w-col-2">
+ 10/13/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=24D975A4-F6EE-420E-A5C9-BDA332A6B14B" class="hyperlink1">Houpsitas Village Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 02/12/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=2098A613-1721-4FB3-B48E-84D84EF9AB39" class="hyperlink1">Lyall Harbour/Boot Cove Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Saturna Island
+ </div>
+ <div class="w-col w-col-2">
+ 10/30/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=0BC06182-BAAD-4816-B6F5-45D7AD2D98B9" class="hyperlink1">Malahat Oceanview Motel</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 07/18/2025
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=F9EC83E8-602A-40C7-8C1C-1CD96E3CC275" class="hyperlink1">Mineral Springs Resort</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 12/06/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=C3CC78A2-14AE-4F9F-9D05-6EF8207604A5" class="hyperlink1">Myock Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Duncan (City)
+ </div>
+ <div class="w-col w-col-2">
+ 06/03/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=1329756A-F369-4839-9A34-795FC1EC9D4D" class="hyperlink1">Petersons At April Point</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 08/20/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=8C0D0D44-EF33-44B5-BB9D-2B060F52006E" class="hyperlink1">Pete's Lake Water Users Society WWS</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 04/21/1994
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=91A36079-80F3-4747-BB52-9B1A8D7FEE71" class="hyperlink1">Poett Nook Marina</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 02/27/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=36FDD573-EEED-4EB6-89EB-9C942C608D85" class="hyperlink1">Puntledge Townsite Water Users Community</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 08/23/1996
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=57921AE9-4EDB-4784-8257-A5DBFFA3BC57" class="hyperlink1">Quadra Childrens Centre</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Campbell River (City)
+ </div>
+ <div class="w-col w-col-2">
+ 07/13/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=5EBFF807-CC34-4063-BC7F-A17758ED9085" class="hyperlink1">Salt Spring Island Kombucha Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 11/05/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=DB05B856-326E-426A-9C87-B1998BF39F48" class="hyperlink1">Saturna Beach Strata </a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Saturna Island
+ </div>
+ <div class="w-col w-col-2">
+ 06/08/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=79FE7F61-4ECD-4FA9-BB7F-3BF2CBD48DD8" class="hyperlink1">Saturna Ecological Education Centre School Water </a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Saturna Island
+ </div>
+ <div class="w-col w-col-2">
+ 09/22/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=A4F0C4AF-C0E1-48DE-9269-2C5CD4460E80" class="hyperlink1">Sollans Road Pump</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 01/21/2005
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=4F27CD7F-67C7-44BB-A269-55E3AAA92C6F" class="hyperlink1">South Bay Management Committee</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Port Alberni (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/26/2000
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=D33CB62C-ED16-444C-AB32-F3A78844AE4F" class="hyperlink1">South End Sausage Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Salt Spring Island
+ </div>
+ <div class="w-col w-col-2">
+ 10/06/2023
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=44F64740-F6D2-4FFA-A4CC-564202B858A3" class="hyperlink1">Strata 1343 Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 10/04/2024
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=F6A535DA-F93C-4D85-BD0C-5F2E38F47C96" class="hyperlink1">Sunnydale Golf Society</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Courtenay (City)
+ </div>
+ <div class="w-col w-col-2">
+ 11/04/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=CBEB9ACA-7E38-4A7E-94F1-7FF005CED694" class="hyperlink1">Tall Timbers Mobile Home Park</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Duncan (City)
+ </div>
+ <div class="w-col w-col-2">
+ 11/06/2026
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=4C4AE74B-0264-40F2-957C-07EC9BEB8600" class="hyperlink1">Untamed Ink</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ Qualicum Beach (Town)
+ </div>
+ <div class="w-col w-col-2">
+ 09/20/2021
+ </div>
+ </div>
+ 
+ <div class="w-row">
+ <div class="w-col w-col-6">
+ <h4 class="establishment-list-name"><a href="/island-health/water-drinking-facility/?permitID=0E780E47-1F1E-4E66-9B6E-3C7B43CD5EAD" class="hyperlink1">Wilderness Mountain Water System</a></h4>
+ </div>
+ <div class="w-col w-col-4">
+ No Municipality
+ </div>
+ <div class="w-col w-col-2">
+ 10/15/2026
+ </div>
+ </div>
+  
+ </div>
+</article>
+  </main>
+  <footer class="footer">
+    <img src="images/MHD-Logo---Light-Background.png" alt="My Health Department" title="My Health Department">
+    <div class="copyright">Copyright &copy; <script>document.write(new Date().getFullYear())</script> My Health Department. All rights reserved.</div>
+  </footer>
+  <script type="text/javascript">
+		function googleTranslateElementInit() {
+			new google.translate.TranslateElement({pageLanguage: 'en'}, 'google_translate_element');
+		}
+	</script>
+	
+	<script type="text/javascript" src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>nrcan:eew:test:1793998824.alert-prod1.eew2</identifier>
+  <sender>earthquakeinfo-infoseisme@nrcan-rncan.gc.ca</sender>
+  <sent>2026-11-06T21:00:24-00:00</sent>
+  <status>Test</status>
+  <msgType>Alert</msgType>
+  <source>alert-prod1.eew2.nrcan-rncan.cloud-nuage.canada.ca</source>
+  <scope>Public</scope>
+  <code>profile:CAP-CP:0.4</code>
+  <code>layer:SOREM:1.0</code>
+  <info>
+    <language>en-CA</language>
+    <category>Other</category>
+    <event>Test Message</event>
+    <responseType>Prepare</responseType>
+    <urgency>Unknown</urgency>
+    <severity>Unknown</severity>
+    <certainty>Unknown</certainty>
+    <eventCode>
+      <valueName>profile:CAP-CP:Event:0.4</valueName>
+      <value>testMessage</value>
+    </eventCode>
+    <effective>2026-11-06T21:00:24-00:00</effective>
+    <expires>2026-11-06T22:00:24-00:00</expires>
+    <senderName>Natural Resources Canada</senderName>
+    <headline>This is a Test Message and is NOT Intended for distribution to the Public</headline>
+    <description>This is a Test Message and is NOT Intended for distribution to the Public</description>
+    <instruction>This is a Test Message and is NOT Intended for distribution to the Public</instruction>
+    <parameter>
+      <valueName>layer:SOREM:1.0:Broadcast_Immediately</valueName>
+      <value>No</value>
+    </parameter>
+    <parameter>
+      <valueName>layer:SOREM:2.0:WirelessImmediate</valueName>
+      <value>No</value>
+    </parameter>
+    <area>
+      <areaDesc>Colville Lake</areaDesc>
+      
+      <geocode>
+        <valueName>profile:CAP-CP:Location:0.3</valueName>
+        <value>6101012</value>
+      </geocode>
+    </area>
+  </info>
+  <info>
+    <language>fr-CA</language>
+    <category>Other</category>
+    <event>Message test</event>
+    <responseType>Prepare</responseType>
+    <urgency>Unknown</urgency>
+    <severity>Unknown</severity>
+    <certainty>Unknown</certainty>
+    <eventCode>
+      <valueName>profile:CAP-CP:Event:0.4</valueName>
+      <value>testMessage</value>
+    </eventCode>
+    <effective>2026-11-06T21:00:24-00:00</effective>
+    <expires>2026-11-06T22:00:24-00:00</expires>
+    <senderName>Ressources naturelles Canada</senderName>
+    <headline>Ceci est un message-test et n'est pas prévu pour la distribution au public</headline>
+    <description>Ceci est un message-test et n'est pas prévu pour la distribution au public</description>
+    <instruction>Ceci est un message-test et n'est pas prévu pour la distribution au public</instruction>
+    <parameter>
+      <valueName>layer:SOREM:1.0:Broadcast_Immediately</valueName>
+      <value>No</value>
+    </parameter>
+    <parameter>
+      <valueName>layer:SOREM:2.0:WirelessImmediate</valueName>
+      <value>No</value>
+    </parameter>
+    <area>
+      <areaDesc>Colville Lake</areaDesc>
+      
+      <geocode>
+        <valueName>profile:CAP-CP:Location:0.3</valueName>
+        <value>6101012</value>
+      </geocode>
+    </area>
+  </info>
+</alert>

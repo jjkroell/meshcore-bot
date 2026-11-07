@@ -1,0 +1,23 @@
+[PublicAlerts]
+enabled = false
+peer_bots =
+role = primary
+route1_name = Southwest BC
+route1_channel = #swbc-alerts
+route1_min_level = warning
+route1_min_colour = yellow
+route1_area_codes = 5909, 5915, 5917, 5919, 5921, 5923, 5924, 5926, 5927, 5929, 5943
+route1_area_names = Metro Vancouver, Fraser Valley, Howe Sound, Whistler, Sea to Sky, Sunshine Coast, Southern Gulf Islands, Greater Victoria, Vancouver Island
+route1_enabled = true
+source1_name = NAAD (Alert Ready)
+source1_type = naad
+source1_url = https://rss1.naad-adna.pelmorex.com/
+source1_enabled = true
+source2_name = NAAD backup
+source2_type = naad
+source2_url = https://rss2.naad-adna.pelmorex.com/
+source2_enabled = true
+source3_name = Environment Canada API
+source3_type = eccc
+source3_url = https://api.weather.gc.ca/collections/weather-alerts/items?limit=500&f=json&bbox=-129.5,47.8,-120.5,51.5
+source3_enabled = false
