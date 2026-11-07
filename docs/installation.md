@@ -4,10 +4,33 @@ Choose how to run the bot:
 
 | Method | Best for |
 |--------|----------|
+| **[Guided install](#guided-install)** | A Linux PC or Raspberry Pi, answering a few questions |
 | **[Docker](docker.md)** | Containers, consistent environments, easy updates |
 | **[Service (systemd)](service-installation.md)** | Linux servers, run at boot, no containers |
 | **Debian package** | `make deb` in the repo — see [README](https://github.com/agessaman/meshcore-bot/blob/main/README.md) |
 | **[pipx](#pipx)** | A single-user install with no repo checkout and no venv management |
+
+## Guided install
+
+On a Linux PC or Raspberry Pi with systemd:
+
+```bash
+git clone https://github.com/jjkroell/meshcore-bot.git
+cd meshcore-bot
+./install.sh
+```
+
+It asks how the radio is connected, the bot's name, location and channel, a
+password for the settings page, and which plugins to add. Nothing changes until
+every question is answered. It then installs Python if needed, sets the bot up
+as a service with [install-service.sh](service-installation.md), starts it and
+prints the settings page address. Plugins install turned off: set them up and
+turn them on from that page.
+
+Run `./install.sh` again later to update. It asks nothing and keeps your
+settings. It refuses to touch a bot installed some other way.
+
+The bot stops if it can't reach the radio, so plug the radio in first.
 
 ## Requirements
 
