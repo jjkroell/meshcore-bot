@@ -14,7 +14,7 @@ import requests
 
 from ..models import MeshMessage
 from ..security_utils import sanitize_name
-from ..utils import calculate_distance
+from ..utils import calculate_distance, geocode_city
 from .base_command import BaseCommand
 
 DEFAULT_API_URL = "https://api.adsb.lol/v2/"
@@ -43,6 +43,11 @@ def _response_body_snippet(response: requests.Response, max_length: int = 200) -
     return sanitize_name(text, max_length=max_length) or "(empty body)"
 
 
+# Arguments _parse_filters understands; anything else is taken as a place name.
+FILTER_KEYS = {'radius', 'alt', 'speed', 'type', 'callsign', 'squawk', 'limit'}
+FILTER_FLAGS = {'military', 'ladd', 'pia', 'closest', 'distance', 'highest', 'altitude', 'fastest'}
+
+
 class AirplanesCommand(BaseCommand):
     """Handles aircraft tracking commands using ADS-B data.
 
@@ -63,10 +68,10 @@ class AirplanesCommand(BaseCommand):
 
     # Documentation
     short_description = "Get aircraft overhead using ADS-B data"
-    usage = "airplanes [lat,lon|here] [radius=N] [options]"
-    examples = ["airplanes", "overhead 47.6,-122.3"]
+    usage = "airplanes [place|lat,lon|here] [radius=N] [options]"
+    examples = ["airplanes", "airplanes vancouver", "overhead 47.6,-122.3"]
     parameters = [
-        {"name": "location", "description": "Coordinates or here for your companion's location if advertised"},
+        {"name": "location", "description": "Place name, coordinates, or here for the bot's location"},
         {"name": "radius", "description": "Search radius in nautical miles (default: 25)"},
         {"name": "filters", "description": "alt=, type=, military, closest, etc."}
     ]
@@ -256,6 +261,12 @@ class AirplanesCommand(BaseCommand):
                 pass
 
         return None
+
+    @staticmethod
+    def _is_filter_arg(arg: str) -> bool:
+        """True if this argument is one _parse_filters understands, not part of a place name."""
+        lowered = arg.lower()
+        return lowered in FILTER_FLAGS or lowered.split('=', 1)[0] in FILTER_KEYS and '=' in lowered
 
     def _parse_filters(self, args: list[str]) -> dict[str, Any]:
         """Parse filter options from command arguments.
@@ -504,7 +515,12 @@ class AirplanesCommand(BaseCommand):
         if filters['sort'] == 'distance':
             filtered.sort(key=lambda x: x.get('_distance_nm', float('inf')))
         elif filters['sort'] == 'altitude':
-            filtered.sort(key=lambda x: (x.get('alt_baro') or x.get('alt_geom') or 0), reverse=True)
+            # alt_baro is the string "ground" for parked and taxiing aircraft.
+            def altitude(aircraft: dict[str, Any]) -> float:
+                alt = aircraft.get('alt_baro') or aircraft.get('alt_geom') or 0
+                return 0 if isinstance(alt, str) else alt
+
+            filtered.sort(key=altitude, reverse=True)
         elif filters['sort'] == 'speed':
             filtered.sort(key=lambda x: (x.get('gs') or 0), reverse=True)
 
@@ -794,6 +810,22 @@ class AirplanesCommand(BaseCommand):
                             if coords:
                                 location = coords
                                 args = args[2:]
+
+                # Anything left before the filters is a place name
+                if location is None:
+                    place_words: list[str] = []
+                    while args and not self._is_filter_arg(args[0]):
+                        place_words.append(args.pop(0))
+                    if place_words:
+                        place = ' '.join(place_words)
+                        lat, lon, _ = await geocode_city(self.bot, place, timeout=self.url_timeout)
+                        if lat is None or lon is None:
+                            error_msg = self.translate(
+                                'commands.airplanes.place_not_found', place=place[:40]
+                            )
+                            await self.send_response(message, error_msg)
+                            return True
+                        location = (lat, lon)
 
                 # If no location specified, try companion then bot
                 if location is None:

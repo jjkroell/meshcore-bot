@@ -1,6 +1,7 @@
 """Tests for airplanes/ADS-B command API URL handling and fetch errors."""
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
@@ -160,3 +161,58 @@ class TestResponseBodySnippet:
         assert "\n" not in snippet
         assert len(snippet) <= 20
         assert snippet.startswith("line1")
+
+
+class TestPlaceName:
+    def _run(self, command_mock_bot, text, geocode=(49.28, -123.12, None)):
+        """Run a command; return (geocode mock, fetch mock, send mock)."""
+        cmd = AirplanesCommand(command_mock_bot)
+        cmd.translate = MagicMock(side_effect=lambda key, **kw: f"{key} {kw}")
+        cmd.send_response = AsyncMock(return_value=True)
+        cmd._get_companion_location = MagicMock(return_value=(1.0, 2.0))
+        cmd._fetch_aircraft_data_async = AsyncMock(return_value={"ac": []})
+        message = MagicMock(content=text)
+        with patch(
+            "modules.commands.airplanes_command.geocode_city", new=AsyncMock(return_value=geocode)
+        ) as geo:
+            asyncio.run(cmd.execute(message))
+        return geo, cmd._fetch_aircraft_data_async, cmd.send_response
+
+    def test_place_is_searched(self, command_mock_bot):
+        geo, fetch, _ = self._run(command_mock_bot, "airplanes vancouver")
+        assert geo.await_args.args[1] == "vancouver"
+        assert fetch.await_args.args[:2] == (49.28, -123.12)
+
+    def test_multi_word_place_keeps_filters(self, command_mock_bot):
+        geo, fetch, _ = self._run(command_mock_bot, "planes port alberni radius=50 highest")
+        assert geo.await_args.args[1] == "port alberni"
+        assert fetch.await_args.args[2] == 50
+
+    def test_unknown_place_says_so_and_does_not_search(self, command_mock_bot):
+        _, fetch, send = self._run(command_mock_bot, "airplanes nowhereville", geocode=(None, None, None))
+        fetch.assert_not_awaited()
+        assert "place_not_found" in send.await_args.args[1]
+
+    @pytest.mark.parametrize("text", ["airplanes", "airplanes military", "airplanes radius=10 fastest"])
+    def test_no_place_uses_your_location(self, command_mock_bot, text):
+        geo, fetch, _ = self._run(command_mock_bot, text)
+        geo.assert_not_awaited()
+        assert fetch.await_args.args[:2] == (1.0, 2.0)
+
+    def test_coordinates_skip_the_lookup(self, command_mock_bot):
+        geo, fetch, _ = self._run(command_mock_bot, "airplanes 49.19,-123.18")
+        geo.assert_not_awaited()
+        assert fetch.await_args.args[:2] == (49.19, -123.18)
+
+
+class TestHighestSort:
+    def test_aircraft_on_the_ground_sort_last(self, command_mock_bot):
+        cmd = AirplanesCommand(command_mock_bot)
+        filters = cmd._parse_filters(["highest"])
+        aircraft = [
+            {"flight": "PARKED", "alt_baro": "ground", "lat": 49.2, "lon": -123.1},
+            {"flight": "HIGH", "alt_baro": 35000, "lat": 49.2, "lon": -123.1},
+            {"flight": "LOW", "alt_baro": 900, "lat": 49.2, "lon": -123.1},
+        ]
+        result = cmd._filter_aircraft(aircraft, filters, 49.2, -123.1)
+        assert [a["flight"] for a in result] == ["HIGH", "LOW", "PARKED"]

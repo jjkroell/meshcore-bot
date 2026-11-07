@@ -303,6 +303,7 @@ Get aircraft tracking information using ADS-B data from adsb.lol or any compatib
 ```
 airplanes
 airplanes here
+airplanes <place>
 airplanes <latitude>,<longitude>
 airplanes [location] [options]
 overhead
