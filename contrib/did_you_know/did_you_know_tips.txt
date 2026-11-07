@@ -1,0 +1,42 @@
+# One tip per line: command: text
+# The command decides whether the tip is used (see did_you_know_service.py).
+# Each tip can be up to 116 bytes. Tips go out in this order, one a day.
+
+test: test (or t) - replies with the path your message took to the bot, plus its SNR and RSSI.
+multitest: mt - listens for 6 seconds and sends back the unique paths your message took to reach the bot.
+path: path - shows the repeaters your message came through, by name.
+ping: ping - replies Pong. A quick check that the bot can hear you.
+wx: wx <place> - current weather and forecast. Add tomorrow for the next day.
+prefix: prefix <id> - looks up which repeaters use that ID, like the ones shown in a path.
+trace: tracer - round-trip trace along your message's path. Heard direct, no hops? Give a path: tracer f2ae,4aa9
+cmd: cmd - lists every command you can use on this channel.
+help: help <command> - explains what a command does and how to use it.
+channels: channels - lists hashtag channels on the mesh. channels list shows every category.
+bots: bots - lists the other bot and test channels.
+stats: stats - shows the bot's numbers for the past 24 hours.
+rain: rain - says when rain should start or stop in the next 2 hours or so. snow does the same for snow.
+aqi: aqi <place> - gives the Air Quality Index for that location.
+tide: tide <place> - tide predictions from the nearest DFO station.
+ferry: ferries <terminal> - BC Ferries sailing status, like ferries NAN or ferries HSB NAN.
+fire: fire <region> - active BC wildfires by fire centre, like fire coastal. Add major for the big ones.
+sun: sun - sunrise and sunset times.
+moon: moon - moon phase with rise and set times.
+aurora: aurora - your chance of seeing the aurora, plus the current Kp index.
+solar: solar - current solar conditions: sunspots, solar flux, and the A and K indexes.
+hfcond: hfcond - HF band conditions for ham radio, by band for day and night.
+satpass: satpass iss - predicts satellite passes. Takes a NORAD number too. Add visual for ones you can see.
+airplanes: airplanes <place> - lists aircraft near there using ADS-B data. Leave out the place for your own area.
+solarforecast: sf <place> - forecasts solar panel output for a location or repeater.
+sports: sports <team> - scores and schedules. Also takes a league, like sports nhl.
+contact: contact - sends the bot's contact details so you can add it.
+advert: advert - DM this to the bot and it sends a flood advert. Limited to once an hour.
+joke: joke - tells a random joke. Add a category: programming, pun, misc or dark.
+dadjoke: dadjoke - tells a random dad joke.
+catfact: meow - sends a random cat fact.
+dogfact: woof - sends a random dog fact.
+dice: dice - rolls a d6. Also takes d20, 2d6 or a mix like d10 d6.
+roll: roll - picks a random number from 1 to 100. roll 50 picks from 1 to 50.
+magic8: magic8 <question> - shakes the Magic 8-Ball for a yes or no answer.
+hacker: sudo - try a Linux command and get a fake supervillain mainframe error. Nothing really runs.
+hello: hello - the bot says hi back with a robot greeting.
+dyk: dyk - sends a random tip like this one, whenever you want.
