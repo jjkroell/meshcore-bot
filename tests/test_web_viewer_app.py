@@ -2228,6 +2228,49 @@ class TestApiZombieRecover:
 
 
 # ---------------------------------------------------------------------------
+# /api/admin/restart-bot
+# ---------------------------------------------------------------------------
+
+
+class TestApiRestartBot:
+    @staticmethod
+    def _post(viewer):
+        with viewer.app.test_client() as client:
+            return client.post('/api/admin/restart-bot', headers={'X-Requested-With': 'XMLHttpRequest'})
+
+    @staticmethod
+    def _queued(viewer):
+        with viewer.db_manager.connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM channel_operations WHERE operation_type = 'bot_restart'"
+            ).fetchone()[0]
+
+    def test_queues_one_restart(self, viewer_with_db, monkeypatch):
+        monkeypatch.setenv('INVOCATION_ID', 'abc')
+        assert self._post(viewer_with_db).status_code == 200
+        assert self._queued(viewer_with_db) == 1
+
+    def test_second_click_adds_nothing(self, viewer_with_db, monkeypatch):
+        monkeypatch.setenv('INVOCATION_ID', 'abc')
+        self._post(viewer_with_db)
+        assert self._post(viewer_with_db).status_code == 200
+        assert self._queued(viewer_with_db) == 1
+
+    def test_refused_without_systemd(self, viewer_with_db, monkeypatch):
+        monkeypatch.delenv('INVOCATION_ID', raising=False)
+        response = self._post(viewer_with_db)
+        assert response.status_code == 409
+        assert self._queued(viewer_with_db) == 0
+
+    def test_needs_the_ajax_header(self, viewer_with_db, monkeypatch):
+        monkeypatch.setenv('INVOCATION_ID', 'abc')
+        viewer_with_db.app.config['TESTING'] = False  # the header check is off in test mode
+        with viewer_with_db.app.test_client() as client:
+            assert client.post('/api/admin/restart-bot').status_code == 403
+        assert self._queued(viewer_with_db) == 0
+
+
+# ---------------------------------------------------------------------------
 # /api/admin/radio-offline-clear
 # ---------------------------------------------------------------------------
 

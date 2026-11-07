@@ -72,6 +72,11 @@
         list-style-position: inside;
     }
     .field-group > summary:hover { color: var(--text-color); }
+    .field-heading { font-size: 0.85rem; margin-top: 0.35rem; }
+    .field-explain > summary { cursor: pointer; font-size: 0.8rem; color: var(--text-muted, #6c757d); }
+    .field-explain dl { font-size: 0.8rem; margin: 0.35rem 0 0; }
+    .field-explain dt { font-weight: 600; }
+    .field-explain dd { margin-bottom: 0.3rem; color: var(--text-muted, #6c757d); }
     .section-badge {
         font-family: var(--bs-font-monospace, monospace);
         font-weight: 500;
@@ -88,14 +93,26 @@
 <div class="container-fluid">
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h1 class="h3 mb-0"><i class="fas fa-puzzle-piece me-2"></i>Plugins</h1>
-        <button class="btn btn-outline-secondary btn-sm" id="plugins-refresh-btn">
-            <i class="fas fa-sync-alt me-1"></i>Refresh
-        </button>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-warning btn-sm" id="plugins-restart-btn">
+                <i class="fas fa-power-off me-1"></i>Restart bot
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" id="plugins-refresh-btn">
+                <i class="fas fa-sync-alt me-1"></i>Refresh
+            </button>
+        </div>
+    </div>
+    <div id="plugins-restart-banner" class="alert alert-warning d-none sticky-top py-2" role="status">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+            <span id="plugins-restart-text"></span>
+            <button class="btn btn-warning btn-sm flex-shrink-0" id="plugins-restart-now">Restart now</button>
+        </div>
     </div>
     <p class="text-muted small mb-2">
         Toggle commands and services on or off and edit their settings. Changes are
         written to <code>config.ini</code> (a timestamped backup is taken on each save)
-        and the bot hot-reloads command settings within a few seconds.
+        and the bot hot-reloads command settings within a few seconds. Some service
+        settings need a bot restart, and this page tells you when they do.
     </p>
 
     <div class="plugins-toolbar mb-3">
@@ -169,6 +186,8 @@ class PluginsManager {
         this.cards = [];  // { el, collapse, kind, enabled, searchText }
 
         document.getElementById('plugins-refresh-btn').addEventListener('click', () => this.load());
+        document.getElementById('plugins-restart-btn').addEventListener('click', () => this.restartBot());
+        document.getElementById('plugins-restart-now').addEventListener('click', () => this.restartBot());
         document.getElementById('plugins-expand-all').addEventListener('click', () => this.setAll(true));
         document.getElementById('plugins-collapse-all').addEventListener('click', () => this.setAll(false));
         document.getElementById('plugins-filter-clear').addEventListener('click', () => {
@@ -500,8 +519,13 @@ class PluginsManager {
                 throw new Error(data.error || 'Save failed');
             }
             let msg = 'Saved.';
-            if (data.restart_required) msg += ' Restart the bot to start/stop this service.';
-            else if (data.reload_queued) msg += ' Bot will reload shortly.';
+            if (data.restart_required) {
+                msg += " Don't forget to restart the bot.";
+                this.remindRestart();
+            } else if (data.reload_queued) {
+                msg += ' Bot will reload shortly.';
+                this.watchReload(data.reload_op_id);
+            }
             this.setStatus(status, msg, 'success');
             // Keep filter state (enabled-only) accurate.
             plugin.enabled = toggle.checked;
@@ -517,6 +541,91 @@ class PluginsManager {
             saveBtn.disabled = false;
             saveBtn.innerHTML = original;
         }
+    }
+
+    showRestartBanner(text, type, showButton) {
+        const banner = document.getElementById('plugins-restart-banner');
+        document.getElementById('plugins-restart-text').textContent = text;
+        document.getElementById('plugins-restart-now').classList.toggle('d-none', !showButton);
+        banner.classList.remove('d-none', 'alert-warning', 'alert-info', 'alert-danger');
+        banner.classList.add('alert-' + type);
+    }
+
+    remindRestart() {
+        this.showRestartBanner("Saved. Don't forget to restart the bot so this takes effect.", 'warning', true);
+    }
+
+    // The bot refuses a hot reload for settings it only reads at startup, and
+    // only says so once it has tried. No answer means it can't be ruled out.
+    async watchReload(opId) {
+        if (!opId) return;
+        for (let i = 0; i < 15; i++) {
+            await new Promise(done => setTimeout(done, 2000));
+            try {
+                const resp = await fetch(`/api/plugins/reload-status?id=${opId}`);
+                const data = await resp.json();
+                if (data.status === 'completed') return;
+                if (data.status === 'failed') {
+                    if ((data.error_message || '').includes('Restart required')) {
+                        this.remindRestart();
+                    } else {
+                        this.showRestartBanner(`Saved, but the bot couldn't reload: ${data.error_message}`, 'danger', true);
+                    }
+                    return;
+                }
+            } catch (err) {
+                break;
+            }
+        }
+        this.remindRestart();
+    }
+
+    async restartBot() {
+        const question = 'Restart the bot? It will be offline for about a minute and will miss '
+            + 'messages sent during that time. Unsaved changes on this page will be lost.';
+        if (!window.confirm(question)) return;
+        const buttons = ['plugins-restart-btn', 'plugins-restart-now'].map(id => document.getElementById(id));
+        buttons.forEach(b => { b.disabled = true; });
+        try {
+            const resp = await fetch('/api/admin/restart-bot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || 'Restart failed');
+        } catch (err) {
+            buttons.forEach(b => { b.disabled = false; });
+            this.showRestartBanner(err.message, 'danger', false);
+            return;
+        }
+        this.showRestartBanner('Restarting the bot. This page reloads when it is back.', 'info', false);
+        this.waitForRestart(buttons);
+    }
+
+    // The web viewer goes down with the bot, so wait to see it go and come back.
+    async waitForRestart(buttons) {
+        const started = Date.now();
+        let wentDown = false;
+        while (Date.now() - started < 180000) {
+            await new Promise(done => setTimeout(done, 2000));
+            let up = false;
+            try {
+                up = (await fetch('/api/plugins/reload-status', { cache: 'no-store' })).ok;
+            } catch (err) {
+                up = false;
+            }
+            if (!up) wentDown = true;
+            if (up && wentDown) {
+                window.location.reload();
+                return;
+            }
+            if (!wentDown && Date.now() - started > 30000) {
+                buttons.forEach(b => { b.disabled = false; });
+                this.showRestartBanner("The bot didn't restart. Check the log.", 'danger', false);
+                return;
+            }
+        }
+        this.showRestartBanner("The bot hasn't come back after 3 minutes. Check it over SSH.", 'danger', false);
     }
 
     setStatus(el, msg, type) {
@@ -536,6 +645,24 @@ function renderField(field, overrideValue) {
     const value = overrideValue !== undefined ? overrideValue : field.value;
 
     let input;
+    if (field.type === 'bool' && field.style === 'check') {
+        // A plain checkbox, for lists of options that read as one choice.
+        const uid = 'ck-' + Math.random().toString(36).slice(2, 9);
+        const check = document.createElement('div');
+        check.className = 'form-check mb-0';
+        input = document.createElement('input');
+        input.className = 'form-check-input';
+        input.type = 'checkbox';
+        input.id = uid;
+        input.checked = (value === true || value === 'true');
+        const label = document.createElement('label');
+        label.className = 'form-check-label small';
+        label.htmlFor = uid;
+        label.textContent = field.label;
+        check.append(input, label);
+        wrapper.appendChild(check);
+        return { wrapper, input };
+    }
     if (field.type === 'bool') {
         // Label on top (like every other field) so the switch lines up with
         // adjacent inputs when fields share a row.
@@ -775,6 +902,41 @@ function validateDynamicRows(rows) {
 
 // --- Repeating structured-block editor (add/remove numbered blocks) ------
 
+// The grid of a collapsible group inside a block, created on first use.
+function blockGroup(groups, name, grid) {
+    if (!groups[name]) {
+        const details = document.createElement('details');
+        details.className = 'col-12 field-group mt-1';
+        const summary = document.createElement('summary');
+        summary.className = 'fw-semibold small text-muted';
+        summary.textContent = name;
+        const inner = document.createElement('div');
+        inner.className = 'row g-2 mt-1 pb-1';
+        details.append(summary, inner);
+        grid.appendChild(details);
+        groups[name] = inner;
+    }
+    return groups[name];
+}
+
+// A collapsed "what do these mean?" list: [{term, text}, ...].
+function fieldExplain(items) {
+    const details = document.createElement('details');
+    details.className = 'col-12 field-explain';
+    const summary = document.createElement('summary');
+    summary.textContent = 'What do these mean?';
+    const list = document.createElement('dl');
+    items.forEach(({ term, text }) => {
+        const dt = document.createElement('dt');
+        dt.textContent = term;
+        const dd = document.createElement('dd');
+        dd.textContent = text;
+        list.append(dt, dd);
+    });
+    details.append(summary, list);
+    return details;
+}
+
 function buildRepeatingBlockEditor(rb) {
     const el = document.createElement('div');
     el.className = 'repeating-section mt-3';
@@ -828,13 +990,25 @@ function buildRepeatingBlockEditor(rb) {
         const grid = document.createElement('div');
         grid.className = 'row g-2';
         const inputs = [];
+        const groups = {};
         rb.fields.forEach(field => {
+            const target = field.group ? blockGroup(groups, field.group, grid) : grid;
+            if (field.heading) {
+                const heading = document.createElement('div');
+                heading.className = 'col-12 field-heading';
+                heading.textContent = field.heading;
+                target.appendChild(heading);
+            }
             const col = document.createElement('div');
-            col.className = fieldColClass(field);
+            col.className = field.style === 'check' ? 'col-auto' : fieldColClass(field);
             const { wrapper, input } = renderField(field, values[field.key]);
             col.appendChild(wrapper);
-            grid.appendChild(col);
+            target.appendChild(col);
+            if (field.explain) target.appendChild(fieldExplain(field.explain));
             inputs.push({ field, input });
+            // A group in use starts open; one that isn't stays out of the way.
+            const inUse = !['', 'none', 'false', undefined].includes(values[field.key]);
+            if (field.group && inUse) target.parentElement.open = true;
         });
         body.appendChild(grid);
         card.appendChild(body);

@@ -1700,6 +1700,7 @@ class BotDataViewer:
                 # Queue a hot reload via the channel_operations table (the bot's
                 # scheduler polls this — same pattern as radio reconnect).
                 reload_queued = False
+                reload_op_id = None
                 try:
                     with self.db_manager.connection() as conn:
                         cursor = conn.cursor()
@@ -1707,6 +1708,7 @@ class BotDataViewer:
                             "INSERT INTO channel_operations (operation_type, status) "
                             "VALUES ('config_reload', 'pending')"
                         )
+                        reload_op_id = cursor.lastrowid
                         conn.commit()
                     reload_queued = True
                 except Exception:
@@ -1720,6 +1722,7 @@ class BotDataViewer:
                     'success': True,
                     'backup_path': backup_path,
                     'reload_queued': reload_queued,
+                    'reload_op_id': reload_op_id,
                     'restart_required': restart_required,
                 })
             except IniValueError as exc:
@@ -1732,11 +1735,14 @@ class BotDataViewer:
 
         @self.app.route('/api/plugins/reload-status')
         def api_plugins_reload_status():
-            """Return the status of the most recent config_reload operation."""
+            """Return the status of one config_reload operation (``?id=``), or the latest."""
             try:
+                op_id = request.args.get('id', type=int)
+                where, params = ("AND id = ?", (op_id,)) if op_id is not None else ("", ())
                 rows = self.db_manager.execute_query(
-                    "SELECT status, result_data, processed_at FROM channel_operations "
-                    "WHERE operation_type = 'config_reload' ORDER BY id DESC LIMIT 1"
+                    "SELECT status, result_data, error_message, processed_at FROM channel_operations "
+                    f"WHERE operation_type = 'config_reload' {where} ORDER BY id DESC LIMIT 1",
+                    params,
                 )
                 if not rows:
                     return jsonify({'status': None})
@@ -1744,6 +1750,7 @@ class BotDataViewer:
                 return jsonify({
                     'status': row.get('status'),
                     'result_data': row.get('result_data'),
+                    'error_message': row.get('error_message'),
                     'processed_at': row.get('processed_at'),
                 })
             except Exception:
@@ -2056,6 +2063,35 @@ class BotDataViewer:
                 return jsonify({'success': False, 'error': 'Internal error — see server logs'}), 500
 
         # ── Radio debug config ───────────────────────────────────────────────
+
+        @self.app.route('/api/admin/restart-bot', methods=['POST'])
+        def api_admin_restart_bot() -> "Response":
+            """Ask the bot to shut down so systemd starts it again."""
+            # Without systemd (INVOCATION_ID is set by it) the bot would just stop.
+            if not os.environ.get('INVOCATION_ID'):
+                return jsonify({
+                    'success': False,
+                    'error': 'The bot is not running as a systemd service, so it would not start again.',
+                }), 409
+            try:
+                with self.db_manager.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT id FROM channel_operations WHERE operation_type = 'bot_restart' "
+                        "AND status IN ('pending', 'processing') "
+                        "AND created_at > datetime('now', '-60 seconds') LIMIT 1"
+                    )
+                    if cursor.fetchone() is None:
+                        cursor.execute(
+                            "INSERT INTO channel_operations (operation_type, status) "
+                            "VALUES ('bot_restart', 'pending')"
+                        )
+                        conn.commit()
+                self.logger.info("Bot restart requested via web UI")
+                return jsonify({'success': True})
+            except Exception:
+                self.logger.exception("Failed to queue bot restart")
+                return jsonify({'success': False, 'error': 'Internal error — see server logs'}), 500
 
         @self.app.route('/api/config/radio-debug')
         def api_config_radio_debug_get() -> "Response":

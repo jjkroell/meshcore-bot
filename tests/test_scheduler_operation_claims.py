@@ -371,3 +371,40 @@ def test_other_host_processing_owner_stays_blocked_conservatively(tmp_path):
     reboot_radio.assert_not_awaited()
     assert _operation(manager, active_id)["status"] == "processing"
     assert _operation(manager, pending_id)["status"] == "pending"
+
+
+def _restart_fixture(tmp_path, age_sql="CURRENT_TIMESTAMP"):
+    db = _FileDBManager(str(tmp_path / "restart.db"))
+    with db.connection() as conn:
+        MigrationRunner(conn, logging.getLogger("test")).run()
+        cursor = conn.execute(
+            "INSERT INTO channel_operations (operation_type, status, created_at) "
+            f"VALUES ('bot_restart', 'pending', {age_sql})"
+        )
+        op_id = cursor.lastrowid
+        conn.commit()
+    scheduler = _make_scheduler(db)
+    scheduler._stop_process_for_restart = Mock()
+    return db, scheduler, op_id
+
+
+def test_restart_request_is_closed_before_the_bot_stops(tmp_path):
+    db, scheduler, op_id = _restart_fixture(tmp_path)
+    seen = []
+    scheduler._stop_process_for_restart = lambda: seen.append(_operation(db, op_id)["status"])
+    asyncio.run(scheduler._process_restart_operations())
+    assert seen == ["completed"]
+
+
+def test_restart_runs_once(tmp_path):
+    _, scheduler, _ = _restart_fixture(tmp_path)
+    asyncio.run(scheduler._process_restart_operations())
+    asyncio.run(scheduler._process_restart_operations())
+    scheduler._stop_process_for_restart.assert_called_once()
+
+
+def test_leftover_restart_request_is_ignored(tmp_path):
+    db, scheduler, op_id = _restart_fixture(tmp_path, "datetime('now', '-5 minutes')")
+    asyncio.run(scheduler._process_restart_operations())
+    scheduler._stop_process_for_restart.assert_not_called()
+    assert _operation(db, op_id)["status"] == "failed"

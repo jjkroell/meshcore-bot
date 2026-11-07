@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import socket
 import sqlite3
 import threading
@@ -49,6 +50,11 @@ _RADIO_OPERATION_TYPES = (
     'radio_advert',
 )
 _CONFIG_OPERATION_TYPES = ('config_reload',)
+_RESTART_OPERATION_TYPES = ('bot_restart',)
+# An older request is left over from before a stop, not something to act on now.
+RESTART_REQUEST_MAX_AGE_SECONDS = 60
+# A shutdown that hangs would leave the bot half stopped, so exit regardless.
+RESTART_FORCE_EXIT_SECONDS = 60
 
 # Let short host stalls or CPU pressure delay a scheduled transmission without
 # dropping it. Coalescing prevents a long suspension from replaying multiple
@@ -898,6 +904,14 @@ class MessageScheduler:
                         lambda f: self.logger.exception("Error processing config operations: %s", f.exception())
                         if not f.cancelled() and f.exception() else None
                     )
+                    restart_future = asyncio.run_coroutine_threadsafe(
+                        self._process_restart_operations(),
+                        self.bot.main_event_loop
+                    )
+                    restart_future.add_done_callback(
+                        lambda f: self.logger.exception("Error processing restart operations: %s", f.exception())
+                        if not f.cancelled() and f.exception() else None
+                    )
                 self.last_radio_ops_check_time = time.time()
 
             # Process feed message queue (every 2 seconds, fire-and-forget)
@@ -1499,6 +1513,44 @@ class MessageScheduler:
 
         except Exception as e:
             self.logger.exception(f"Error in _process_config_operations: {e}")
+
+    async def _process_restart_operations(self):
+        """Shut the bot down cleanly when the web viewer asks for a restart.
+
+        The service manager starts it again (``Restart=always``); the web viewer
+        refuses the request when there isn't one.
+        """
+        try:
+            op = self._claim_operation(_RESTART_OPERATION_TYPES)
+            if not op:
+                return
+
+            created = datetime.datetime.strptime(
+                str(op['created_at']), '%Y-%m-%d %H:%M:%S'
+            ).replace(tzinfo=datetime.timezone.utc)
+            age = (datetime.datetime.now(datetime.timezone.utc) - created).total_seconds()
+            if age > RESTART_REQUEST_MAX_AGE_SECONDS:
+                self._finish_claimed_operation(
+                    op['id'], success=False, error_message='Restart request expired'
+                )
+                self.logger.warning("Ignored expired restart request %s", op['id'])
+                return
+
+            # Closed before stopping: a request left open would restart the bot
+            # again as soon as it came back.
+            self._finish_claimed_operation(
+                op['id'], success=True, result_payload={'success': True, 'message': 'Restarting'}
+            )
+            self.logger.info("Restarting at the web viewer's request (operation %s)", op['id'])
+            self._stop_process_for_restart()
+        except Exception as e:
+            self.logger.exception(f"Error in _process_restart_operations: {e}")
+
+    def _stop_process_for_restart(self) -> None:
+        timer = threading.Timer(RESTART_FORCE_EXIT_SECONDS, os._exit, args=(1,))
+        timer.daemon = True
+        timer.start()
+        os.kill(os.getpid(), signal.SIGTERM)
 
     async def _firmware_read_op(self):
         """Read the path hash mode and default flood scope from radio firmware."""
